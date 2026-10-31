@@ -15,42 +15,77 @@ import (
 // serializes the last-reference race on Postgres (SQLite writes are already
 // fully serialized). The invariant at every commit point is
 // ref_count == COUNT(*) FROM parts WHERE part_id = X.
+// An orphaned row has no metadata references and must never gain any: it
+// records a physical part without registry row (an interrupted write or a
+// failed post-condemn deletion) until GC may delete it after retention.
 type Repository interface {
-	// RegisterParts inserts registry rows for freshly created part ids.
-	// Refs are processed in ascending part-id order.
+	// RegisterParts inserts registry rows for freshly created part ids and
+	// records the store holding each part, so GC can reclaim it without
+	// listing stores. Refs are processed in ascending part-id order.
 	RegisterParts(ctx context.Context, tx *sql.Tx, refs []Ref) error
-	// TryAddReferences increments ref_count per ref, guarded by ref_count > 0
-	// so a condemned part is never resurrected. It returns false as soon as a
-	// guard fails; earlier increments within the same call are rolled back with
-	// the surrounding transaction by the caller. Refs are processed in
-	// ascending part-id order.
+	// RegisterUnreferenced records a part in storeName that metadata never
+	// referenced. No reader can hold such a part, so its retention has
+	// already expired and the next sweep may delete it. An existing row is
+	// left untouched.
+	RegisterUnreferenced(ctx context.Context, tx *sql.Tx, partId partstore.PartId, storeName *string) error
+	// TryAddReferences increments ref_count and clears unreferenced_at.
+	// An orphaned part (condemned, or missing its registry row) is never
+	// resurrected. It returns false as soon as a guard fails; earlier
+	// increments are rolled back with the surrounding transaction by the
+	// caller. Refs are processed in ascending part-id order.
 	TryAddReferences(ctx context.Context, tx *sql.Tx, refs []Ref) (bool, error)
-	// RemoveReferences decrements ref_count per ref and returns the part ids
-	// whose count reached zero (their rows are deleted); only those may be
-	// physically deleted. A missing row or insufficient count is skipped so the
+	// RemoveReferences decrements ref_count and clears the GC observation clock.
+	// Rows that reach zero are retained: physical deletion is exclusively
+	// performed by GC. A missing row or insufficient count is skipped so the
 	// part leaks until GC instead of risking deletion of live data. Refs are
 	// processed in ascending part-id order.
-	RemoveReferences(ctx context.Context, tx *sql.Tx, refs []Ref) ([]partstore.PartId, error)
+	RemoveReferences(ctx context.Context, tx *sql.Tx, refs []Ref) error
 	FindAllEntities(ctx context.Context, tx *sql.Tx) ([]Entity, error)
 	FindReconciliation(ctx context.Context, tx *sql.Tx) ([]Reconciliation, error)
 	UpdateRefCount(ctx context.Context, tx *sql.Tx, partId partstore.PartId, refCount, version int64) (bool, error)
-	DeleteByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId, version int64) (bool, error)
+	// RestoreMissing inserts a row for parts without one and records the
+	// store the parts table names, so the sweep deletes from the right store.
 	RestoreMissing(ctx context.Context, tx *sql.Tx, ref Ref) (bool, error)
-	Condemn(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (bool, error)
+	// Condemn must run in a fresh GC write transaction (not a metadata mutation
+	// transaction or an ambient reader snapshot). The first committed-zero
+	// observation starts retention; only later observations may condemn.
+	// A condemned row stays orphaned until Forget, so a failed physical
+	// deletion is retried by the next sweep and the id is never resurrected.
+	// Missing rows become orphaned rows for the same reason.
+	Condemn(ctx context.Context, tx *sql.Tx, partId partstore.PartId, cutoff time.Time) (bool, error)
+	// Forget deletes a condemned row once its physical part is gone.
+	Forget(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (bool, error)
+	// FindUnreferenced returns up to limit zero-reference rows after the given
+	// part id, in ascending part-id order, skipping rows still in retention.
+	FindUnreferenced(ctx context.Context, tx *sql.Tx, cutoff time.Time, after *partstore.PartId, limit int) ([]Unreferenced, error)
+	// TrackOrphan inserts an orphaned row for a physical part in storeName
+	// that has neither a registry row nor metadata references.
+	TrackOrphan(ctx context.Context, tx *sql.Tx, partId partstore.PartId, storeName *string) (bool, error)
 }
 
-// Ref is a reference-count change for one part id.
+// Ref is a reference-count change for one part id. StoreName is only used
+// by RegisterParts; nil means the default store.
 type Ref struct {
-	PartId partstore.PartId
-	Delta  int64
+	PartId    partstore.PartId
+	Delta     int64
+	StoreName *string
+}
+
+// Unreferenced is a zero-reference registry row and the store holding its
+// part; nil means the default store.
+type Unreferenced struct {
+	PartId    partstore.PartId
+	StoreName *string
 }
 
 type Entity struct {
-	PartId    partstore.PartId
-	RefCount  int64
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Version   int64
+	PartId         partstore.PartId
+	RefCount       int64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	Version        int64
+	UnreferencedAt *time.Time
+	Orphaned       bool
 }
 
 type Reconciliation struct {

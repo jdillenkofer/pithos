@@ -12,8 +12,6 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObject")
 	defer span.End()
 
-	unreferencedParts := []metadatastore.Part{}
-
 	bucketEntity, err := sms.bucketRepository.FindBucketByNameForShare(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -53,12 +51,10 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			return nil, err
 		}
 		if !versionEntity.IsDeleteMarker {
-			removed, removeErr := sms.removePartRowsByObjectId(ctx, tx, *versionEntity.Id)
-			err = removeErr
+			err = sms.removePartRowsByObjectId(ctx, tx, *versionEntity.Id)
 			if err != nil {
 				return nil, err
 			}
-			unreferencedParts = append(unreferencedParts, removed...)
 		}
 
 		err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *versionEntity.Id)
@@ -89,7 +85,7 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			}
 		}
 
-		return &metadatastore.DeleteObjectResult{VersionID: versionEntity.VersionID, IsDeleteMarker: versionEntity.IsDeleteMarker, UnreferencedParts: unreferencedParts}, nil
+		return &metadatastore.DeleteObjectResult{VersionID: versionEntity.VersionID, IsDeleteMarker: versionEntity.IsDeleteMarker}, nil
 	}
 
 	if opts != nil && opts.IfMatchETag != nil {
@@ -114,11 +110,9 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 				if err := sms.checkVersionDeletion(ctx, tx, nullVersionEntity, bucketEntity.ObjectLockEnabled, opts != nil && opts.BypassGovernanceRetention); err != nil {
 					return nil, err
 				}
-				removed, removeErr := sms.removePartRowsByObjectId(ctx, tx, *nullVersionEntity.Id)
-				if removeErr != nil {
-					return nil, removeErr
+				if err := sms.removePartRowsByObjectId(ctx, tx, *nullVersionEntity.Id); err != nil {
+					return nil, err
 				}
-				unreferencedParts = append(unreferencedParts, removed...)
 				err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *nullVersionEntity.Id)
 				if err != nil {
 					return nil, err
@@ -157,7 +151,7 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			return nil, err
 		}
 		metadatastore.ObserveObjectLock(ctx, metadatastore.ObjectLockObservation{Key: key.String(), VersionID: deleteMarker.VersionID})
-		return &metadatastore.DeleteObjectResult{VersionID: deleteMarker.VersionID, IsDeleteMarker: true, UnreferencedParts: unreferencedParts}, nil
+		return &metadatastore.DeleteObjectResult{VersionID: deleteMarker.VersionID, IsDeleteMarker: true}, nil
 	}
 
 	if currentEntity != nil {
@@ -175,12 +169,10 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			}
 
 			if !lockedObjectEntity.IsDeleteMarker {
-				removed, removeErr := sms.removePartRowsByObjectId(ctx, tx, *lockedObjectEntity.Id)
-				err = removeErr
+				err = sms.removePartRowsByObjectId(ctx, tx, *lockedObjectEntity.Id)
 				if err != nil {
 					return nil, err
 				}
-				unreferencedParts = append(unreferencedParts, removed...)
 			}
 
 			err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *lockedObjectEntity.Id)
@@ -202,12 +194,10 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			}
 		} else {
 			if !currentEntity.IsDeleteMarker {
-				removed, removeErr := sms.removePartRowsByObjectId(ctx, tx, *currentEntity.Id)
-				err = removeErr
+				err = sms.removePartRowsByObjectId(ctx, tx, *currentEntity.Id)
 				if err != nil {
 					return nil, err
 				}
-				unreferencedParts = append(unreferencedParts, removed...)
 			}
 
 			err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *currentEntity.Id)
@@ -227,5 +217,5 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 		}
 	}
 
-	return &metadatastore.DeleteObjectResult{UnreferencedParts: unreferencedParts}, nil
+	return &metadatastore.DeleteObjectResult{}, nil
 }

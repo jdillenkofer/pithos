@@ -127,6 +127,9 @@ func newSqliteGCTestEnv(t *testing.T) *gcTestEnv {
 
 func newPostgresGCTestEnv(t *testing.T) *gcTestEnv {
 	t.Helper()
+	// Windows runners' Docker has no bridge network for Linux containers;
+	// the provider health check does not detect this.
+	testutils.SkipOnWindowsInGitHubActions(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 	ctx := context.Background()
 	container, err := postgres.Run(ctx, testutils.PostgresImage,
@@ -227,7 +230,7 @@ func TestRunGCCollectsRolledBackPartsWithoutDeletingCommittedParts(t *testing.T)
 				if err := env.physicalStore.PutPart(ctx, tx, id, bytes.NewBufferString("abc")); err != nil {
 					return err
 				}
-				_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+				err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
 					Key: metadatastore.MustNewObjectKey(key), ETag: "etag", Size: 3,
 					Parts: []metadatastore.Part{{Id: id, ETag: "etag", Size: 3}},
 				}, nil)
@@ -277,6 +280,18 @@ func TestRunGCCollectsRolledBackPartsWithoutDeletingCommittedParts(t *testing.T)
 				assertParts([]partstore.PartId{liveID})
 			}
 			env.collector.graceWindow = 30 * time.Minute
+			if backend == "filesystem" {
+				// Missing-row orphans also need a committed-zero observation;
+				// old creation time alone cannot bypass retention.
+				for range 2 {
+					require.NoError(t, env.collector.runGC())
+					assertParts([]partstore.PartId{liveID, orphanID})
+				}
+				require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+					_, err := tx.SqlTx().ExecContext(ctx, "UPDATE part_registry SET unreferenced_at=$1 WHERE part_id=$2", time.Now().UTC().Add(-time.Hour), orphanID.String())
+					return err
+				}))
+			}
 			for range 2 {
 				require.NoError(t, env.collector.runGC())
 				assertParts([]partstore.PartId{liveID})
@@ -305,7 +320,7 @@ func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
 			if err := env.physicalStore.PutPart(ctx, tx, id, bytes.NewReader([]byte{byte(i)})); err != nil {
 				return err
 			}
-			_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+			err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
 				Key:   metadatastore.MustNewObjectKey(string(rune('a' + i))),
 				ETag:  "etag",
 				Size:  1,
@@ -346,7 +361,7 @@ func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
 		for _, entity := range entities {
 			counts[entity.PartId] = entity.RefCount
 		}
-		assert.Equal(t, map[partstore.PartId]int64{liveIDs[0]: 1, liveIDs[1]: 1}, counts)
+		assert.Equal(t, map[partstore.PartId]int64{liveIDs[0]: 1, liveIDs[1]: 1, *orphanID: 0}, counts)
 		ids, err := env.physicalStore.GetPartIds(ctx, tx)
 		if err != nil {
 			return err
@@ -396,7 +411,7 @@ func runGCBackfillScenario(t *testing.T, env *gcTestEnv) {
 		if err := env.physicalStore.PutPart(ctx, tx, part.Id, bytes.NewReader([]byte("abc"))); err != nil {
 			return err
 		}
-		_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+		err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
 			Key:   metadatastore.MustNewObjectKey(key),
 			ETag:  part.ETag,
 			Size:  part.Size,

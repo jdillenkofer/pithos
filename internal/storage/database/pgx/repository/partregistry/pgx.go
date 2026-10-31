@@ -15,15 +15,20 @@ type postgresRepository struct {
 }
 
 const (
-	insertPartRegistryStmt          = "INSERT INTO part_registry (part_id, ref_count, version, created_at, updated_at) VALUES ($1, $2, 1, $3, $4)"
-	addReferencesStmt               = "UPDATE part_registry SET ref_count = ref_count + $1, version = version + 1, updated_at = $2 WHERE part_id = $3 AND ref_count > 0"
-	removeReferencesStmt            = "UPDATE part_registry SET ref_count = ref_count - $1, version = version + 1, updated_at = $2 WHERE part_id = $3 AND ref_count >= $1 RETURNING ref_count, version"
-	findAllPartRegistryEntitiesStmt = "SELECT part_id, ref_count, created_at, updated_at, version FROM part_registry"
+	insertPartRegistryStmt          = "INSERT INTO part_registry (part_id, ref_count, part_store_name, version, created_at, updated_at) VALUES ($1, $2, $3, 1, $4, $5)"
+	addReferencesStmt               = "UPDATE part_registry SET ref_count = ref_count + $1, version = version + 1, updated_at = $2, unreferenced_at = NULL WHERE part_id = $3 AND NOT orphaned"
+	removeReferencesStmt            = "UPDATE part_registry SET ref_count = ref_count - $1, version = version + 1, updated_at = $2, unreferenced_at = NULL WHERE part_id = $3 AND ref_count >= $1"
+	findAllPartRegistryEntitiesStmt = "SELECT part_id, ref_count, created_at, updated_at, version, unreferenced_at, orphaned FROM part_registry"
 	reconciliationStmt              = "SELECT p.part_id, COUNT(*) AS actual_count, r.ref_count, r.version FROM parts p LEFT JOIN part_registry r ON r.part_id = p.part_id GROUP BY p.part_id, r.ref_count, r.version UNION ALL SELECT r.part_id, 0, r.ref_count, r.version FROM part_registry r WHERE NOT EXISTS (SELECT 1 FROM parts p WHERE p.part_id = r.part_id)"
-	updateRefCountByPartIdStmt      = "UPDATE part_registry SET ref_count = $1, version = version + 1, updated_at = $2 WHERE part_id = $3 AND version = $4"
-	deleteByPartIdStmt              = "DELETE FROM part_registry WHERE part_id = $1 AND version = $2"
-	restoreMissingStmt              = "INSERT INTO part_registry (part_id,ref_count,version,created_at,updated_at) VALUES ($1,$2,1,$3,$3) ON CONFLICT(part_id) DO NOTHING"
-	findRegistryForCondemnStmt      = "SELECT ref_count,version FROM part_registry WHERE part_id=$1 FOR UPDATE"
+	updateRefCountByPartIdStmt      = "UPDATE part_registry SET ref_count = $1, orphaned = orphaned AND $1::BIGINT = 0, version = version + 1, updated_at = $2, unreferenced_at = CASE WHEN $1::BIGINT = 0 AND ref_count = 0 THEN unreferenced_at ELSE NULL END WHERE part_id = $3 AND version = $4"
+	restoreMissingStmt              = "INSERT INTO part_registry (part_id, ref_count, part_store_name, version, created_at, updated_at) SELECT $1::TEXT, $2::BIGINT, MIN(part_store_name), 1, $3::TIMESTAMP, $3::TIMESTAMP FROM parts WHERE part_id = $1::TEXT ON CONFLICT(part_id) DO NOTHING"
+	insertUnreferencedStmt          = "INSERT INTO part_registry (part_id, ref_count, part_store_name, version, created_at, updated_at, unreferenced_at) VALUES ($1, 0, $2, 1, $3, $3, $4) ON CONFLICT(part_id) DO NOTHING"
+	insertOrphanStmt                = "INSERT INTO part_registry (part_id, ref_count, orphaned, part_store_name, version, created_at, updated_at) VALUES ($1, $2, $3, $4, 1, $5, $5) ON CONFLICT(part_id) DO NOTHING"
+	markUnreferencedStmt            = "UPDATE part_registry SET unreferenced_at = $1 WHERE part_id = $2 AND version = $3"
+	findRegistryForCondemnStmt      = "SELECT ref_count,version,unreferenced_at FROM part_registry WHERE part_id=$1 FOR UPDATE"
+	condemnStmt                     = "UPDATE part_registry SET orphaned = $1, version = version + 1, updated_at = $2 WHERE part_id = $3 AND version = $4"
+	forgetStmt                      = "DELETE FROM part_registry WHERE part_id = $1 AND orphaned AND ref_count = $2"
+	findUnreferencedStmt            = "SELECT part_id, part_store_name FROM part_registry WHERE ref_count = 0 AND part_id > $1 AND (unreferenced_at IS NULL OR unreferenced_at < $2) ORDER BY part_id LIMIT $3"
 	countPartsByPartIdStmt          = "SELECT COUNT(*) FROM parts WHERE part_id=$1"
 )
 
@@ -34,12 +39,17 @@ func NewRepository() (partregistry.Repository, error) {
 func (pr *postgresRepository) RegisterParts(ctx context.Context, tx *sql.Tx, refs []partregistry.Ref) error {
 	now := time.Now().UTC()
 	for _, ref := range partregistry.SortRefs(refs) {
-		_, err := tx.ExecContext(ctx, insertPartRegistryStmt, ref.PartId.String(), ref.Delta, now, now)
+		_, err := tx.ExecContext(ctx, insertPartRegistryStmt, ref.PartId.String(), ref.Delta, ref.StoreName, now, now)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (pr *postgresRepository) RegisterUnreferenced(ctx context.Context, tx *sql.Tx, partId partstore.PartId, storeName *string) error {
+	_, err := tx.ExecContext(ctx, insertUnreferencedStmt, partId.String(), storeName, time.Now().UTC(), time.Unix(0, 0).UTC())
+	return err
 }
 
 func (pr *postgresRepository) TryAddReferences(ctx context.Context, tx *sql.Tx, refs []partregistry.Ref) (bool, error) {
@@ -60,30 +70,25 @@ func (pr *postgresRepository) TryAddReferences(ctx context.Context, tx *sql.Tx, 
 	return true, nil
 }
 
-func (pr *postgresRepository) RemoveReferences(ctx context.Context, tx *sql.Tx, refs []partregistry.Ref) ([]partstore.PartId, error) {
+func (pr *postgresRepository) RemoveReferences(ctx context.Context, tx *sql.Tx, refs []partregistry.Ref) error {
 	now := time.Now().UTC()
-	unreferenced := []partstore.PartId{}
 	for _, ref := range partregistry.SortRefs(refs) {
-		var refCount, version int64
-		err := tx.QueryRowContext(ctx, removeReferencesStmt, ref.Delta, now, ref.PartId.String()).Scan(&refCount, &version)
-		if err == sql.ErrNoRows {
+		// Zero-reference rows are retained; only GC may condemn and delete parts.
+		r, err := tx.ExecContext(ctx, removeReferencesStmt, ref.Delta, now, ref.PartId.String())
+		if err != nil {
+			return err
+		}
+		n, err := r.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
 			// Missing row or insufficient ref_count: skip the decrement so the
 			// part leaks until GC instead of ever deleting live data.
 			slog.Warn(fmt.Sprintf("part registry: skipping decrement of %d for part %s (row missing or ref_count too low)", ref.Delta, ref.PartId.String()))
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if refCount == 0 {
-			_, err = tx.ExecContext(ctx, deleteByPartIdStmt, ref.PartId.String(), version)
-			if err != nil {
-				return nil, err
-			}
-			unreferenced = append(unreferenced, ref.PartId)
 		}
 	}
-	return unreferenced, nil
+	return nil
 }
 
 func (pr *postgresRepository) FindAllEntities(ctx context.Context, tx *sql.Tx) ([]partregistry.Entity, error) {
@@ -96,7 +101,7 @@ func (pr *postgresRepository) FindAllEntities(ctx context.Context, tx *sql.Tx) (
 	for rows.Next() {
 		var entity partregistry.Entity
 		var partIdStr string
-		err := rows.Scan(&partIdStr, &entity.RefCount, &entity.CreatedAt, &entity.UpdatedAt, &entity.Version)
+		err := rows.Scan(&partIdStr, &entity.RefCount, &entity.CreatedAt, &entity.UpdatedAt, &entity.Version, &entity.UnreferencedAt, &entity.Orphaned)
 		if err != nil {
 			return nil, err
 		}
@@ -108,15 +113,6 @@ func (pr *postgresRepository) FindAllEntities(ctx context.Context, tx *sql.Tx) (
 
 func (pr *postgresRepository) UpdateRefCount(ctx context.Context, tx *sql.Tx, partId partstore.PartId, refCount, version int64) (bool, error) {
 	r, err := tx.ExecContext(ctx, updateRefCountByPartIdStmt, refCount, time.Now().UTC(), partId.String(), version)
-	if err != nil {
-		return false, err
-	}
-	n, err := r.RowsAffected()
-	return n == 1, err
-}
-
-func (pr *postgresRepository) DeleteByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId, version int64) (bool, error) {
-	r, err := tx.ExecContext(ctx, deleteByPartIdStmt, partId.String(), version)
 	if err != nil {
 		return false, err
 	}
@@ -157,23 +153,90 @@ func (pr *postgresRepository) RestoreMissing(ctx context.Context, tx *sql.Tx, re
 	n, err := r.RowsAffected()
 	return n == 1, err
 }
-func (pr *postgresRepository) Condemn(ctx context.Context, tx *sql.Tx, id partstore.PartId) (bool, error) {
+func (pr *postgresRepository) Condemn(ctx context.Context, tx *sql.Tx, id partstore.PartId, cutoff time.Time) (bool, error) {
 	var ref, version int64
-	err := tx.QueryRowContext(ctx, findRegistryForCondemnStmt, id.String()).Scan(&ref, &version)
+	var unreferenced sql.NullTime
+	err := tx.QueryRowContext(ctx, findRegistryForCondemnStmt, id.String()).Scan(&ref, &version, &unreferenced)
 	if err == sql.ErrNoRows {
 		var live int
 		err = tx.QueryRowContext(ctx, countPartsByPartIdStmt, id.String()).Scan(&live)
-		return live == 0, err
+		if err != nil || live != 0 {
+			return false, err
+		}
+		// Even missing rows and deletion retries need a committed observation.
+		_, err = tx.ExecContext(ctx, insertOrphanStmt, id.String(), 0, true, nil, time.Now().UTC())
+		return false, err
 	}
 	if err != nil {
 		return false, err
 	}
-	if ref != 0 {
+	if ref == 0 && !unreferenced.Valid {
+		// Sample after acquiring the row lock and observing committed zero refs.
+		_, err = tx.ExecContext(ctx, markUnreferencedStmt, time.Now().UTC(), id.String(), version)
+		return false, err
+	}
+	if ref != 0 || !unreferenced.Valid || !unreferenced.Time.Before(cutoff) {
 		return false, nil
 	}
 	var live int
 	if err = tx.QueryRowContext(ctx, countPartsByPartIdStmt, id.String()).Scan(&live); err != nil || live != 0 {
 		return false, err
 	}
-	return pr.DeleteByPartId(ctx, tx, id, version)
+	r, err := tx.ExecContext(ctx, condemnStmt, true, time.Now().UTC(), id.String(), version)
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
+}
+
+func (pr *postgresRepository) Forget(ctx context.Context, tx *sql.Tx, id partstore.PartId) (bool, error) {
+	r, err := tx.ExecContext(ctx, forgetStmt, id.String(), 0)
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
+}
+
+// FindUnreferenced keeps ref_count = 0 as a literal in its statement: only
+// then may the planner use the partial index for prepared statements, as
+// PostgreSQL's generic plans cannot prove a bound parameter matches it.
+func (pr *postgresRepository) FindUnreferenced(ctx context.Context, tx *sql.Tx, cutoff time.Time, after *partstore.PartId, limit int) ([]partregistry.Unreferenced, error) {
+	afterId := ""
+	if after != nil {
+		afterId = after.String()
+	}
+	rows, err := tx.QueryContext(ctx, findUnreferencedStmt, afterId, cutoff.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []partregistry.Unreferenced
+	for rows.Next() {
+		var id string
+		var storeName sql.NullString
+		if err := rows.Scan(&id, &storeName); err != nil {
+			return nil, err
+		}
+		item := partregistry.Unreferenced{PartId: *partstore.MustNewPartIdFromString(id)}
+		if storeName.Valid {
+			item.StoreName = &storeName.String
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (pr *postgresRepository) TrackOrphan(ctx context.Context, tx *sql.Tx, id partstore.PartId, storeName *string) (bool, error) {
+	var live int
+	if err := tx.QueryRowContext(ctx, countPartsByPartIdStmt, id.String()).Scan(&live); err != nil || live != 0 {
+		return false, err
+	}
+	r, err := tx.ExecContext(ctx, insertOrphanStmt, id.String(), 0, true, storeName, time.Now().UTC())
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
 }

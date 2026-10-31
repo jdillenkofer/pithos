@@ -58,6 +58,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 	defer span.End()
 
 	var calculatedChecksums *checksumutils.ChecksumValues
+	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		// Parts route to the store of the class chosen at
 		// CreateMultipartUpload, so the upload must be resolved before the
@@ -74,6 +75,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 		}
 
 		originalSize, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
+			written.add(storeName, *partId)
 			return store.PutPart(ctx, tx, *partId, reader)
 		})
 		if err != nil {
@@ -85,12 +87,12 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 		if err != nil {
 			return err
 		}
-		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *partId, calculatedChecksums, *originalSize)
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, *partId, calculatedChecksums, *originalSize)
 		if err != nil {
 			return err
 		}
 
-		metadataResult, err := mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), bucketName, key, uploadId, partNumber, metadatastore.Part{
+		return mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), bucketName, key, uploadId, partNumber, metadatastore.Part{
 			Id:                dedupedPartID,
 			ETag:              *calculatedChecksums.ETag,
 			ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
@@ -102,11 +104,8 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 			StoreName:         storeName,
 			RefPreAcquired:    refPreAcquired,
 		})
-		if err != nil {
-			return err
-		}
-		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
+	mbs.reclaimWrittenParts(ctx, err, written)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +144,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 	defer span.End()
 
 	var result storage.UploadPartCopyResult
+	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		var srcObject *metadatastore.Object
 		var err error
@@ -203,11 +203,8 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			}
 			sharedPart := *coveredPart
 			sharedPart.RefPreAcquired = true
-			metadataResult, err := mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId, partNumber, sharedPart)
+			err = mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId, partNumber, sharedPart)
 			if err != nil {
-				return err
-			}
-			if err := mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts); err != nil {
 				return err
 			}
 			result = storage.UploadPartCopyResult{ETag: coveredPart.ETag, LastModified: time.Now(), SourceVersionID: srcObject.VersionID}
@@ -225,17 +222,18 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			return err
 		}
 		size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
+			written.add(storeName, *newPartId)
 			return store.PutPart(ctx, tx, *newPartId, r)
 		})
 		if err != nil {
 			return err
 		}
-		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *newPartId, checksums, *size)
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, *newPartId, checksums, *size)
 		if err != nil {
 			return err
 		}
 
-		metadataResult, err := mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId, partNumber, metadatastore.Part{
+		err = mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId, partNumber, metadatastore.Part{
 			Id:                dedupedPartID,
 			ETag:              *checksums.ETag,
 			ChecksumCRC32:     checksums.ChecksumCRC32,
@@ -250,13 +248,11 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 		if err != nil {
 			return err
 		}
-		if err := mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts); err != nil {
-			return err
-		}
 
 		result = storage.UploadPartCopyResult{ETag: *checksums.ETag, LastModified: time.Now(), SourceVersionID: srcObject.VersionID}
 		return nil
 	})
+	mbs.reclaimWrittenParts(ctx, err, written)
 	if err != nil {
 		return nil, err
 	}
@@ -286,9 +282,6 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 		if err != nil {
 			return err
 		}
-		if err := mbs.deleteUnreferencedParts(ctx, tx, result.UnreferencedParts); err != nil {
-			return err
-		}
 		completeMultipartUploadResult = convertCompleteMultipartUploadResult(*result)
 		return nil
 	})
@@ -302,11 +295,7 @@ func (mbs *metadataPartStorage) AbortMultipartUpload(ctx context.Context, bucket
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.AbortMultipartUpload")
 	defer span.End()
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		abortMultipartUploadResult, err := mbs.metadataStore.AbortMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId)
-		if err != nil {
-			return err
-		}
-		return mbs.deleteUnreferencedParts(ctx, tx, abortMultipartUploadResult.UnreferencedParts)
+		return mbs.metadataStore.AbortMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId)
 	})
 }
 
