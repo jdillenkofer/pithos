@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
@@ -144,6 +145,15 @@ func (sdb *sqliteDatabase) Close() error {
 		return err
 	}
 	return nil
+}
+
+// OldestOpenTransactionAge never reports a transaction: only one process
+// opens the file, and writable transactions share one connection, so every
+// transaction open now has finished before the caller's next writable
+// transaction starts. A caller that rechecks inside that transaction sees
+// what they committed.
+func (sdb *sqliteDatabase) OldestOpenTransactionAge(ctx context.Context) (time.Duration, bool, error) {
+	return 0, false, nil
 }
 
 func (sdb *sqliteDatabase) GetDatabaseType() database.DatabaseType {
