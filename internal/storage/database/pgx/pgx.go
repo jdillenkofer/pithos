@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"time"
 
@@ -36,16 +37,26 @@ func createMigrateInstance(db *sql.DB) (*migrate.Migrate, error) {
 	return m, nil
 }
 
-func applyDatabaseMigrations(db *sql.DB) error {
-	m, err := createMigrateInstance(db)
+// applyDatabaseMigrations migrates through a pool of its own. The migration
+// driver pins one connection until it is closed, and closing it closes its
+// pool too, so migrating through the storage's pool would take one of its
+// connections for good.
+func applyDatabaseMigrations(dbUrl string) error {
+	db, err := database.OpenSQL("pgx", dbUrl, semconv.DBSystemPostgreSQL)
 	if err != nil {
 		return err
 	}
+	m, err := createMigrateInstance(db)
+	if err != nil {
+		db.Close()
+		return err
+	}
 	err = m.Up()
+	sourceErr, dbErr := m.Close()
 	if err != nil && err != migrate.ErrNoChange {
 		return err
 	}
-	return nil
+	return errors.Join(sourceErr, dbErr)
 }
 
 type pgxDatabase struct {
@@ -109,16 +120,14 @@ func (d *pgxDatabase) GetDatabaseType() database.DatabaseType {
 }
 
 func OpenDatabase(dbUrl string, poolConfig *ConnectionPoolConfiguration) (*pgxDatabase, error) {
+	if err := applyDatabaseMigrations(dbUrl); err != nil {
+		return nil, err
+	}
 	db, err := database.OpenSQL("pgx", dbUrl, semconv.DBSystemPostgreSQL)
 	if err != nil {
 		return nil, err
 	}
 	configureConnectionPool(db, poolConfig)
-	err = setupDatabase(db)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
 	pgxDatabase := pgxDatabase{db}
 	return &pgxDatabase, nil
 }
@@ -178,12 +187,4 @@ func defaultPoolConfiguration() ConnectionPoolConfiguration {
 		ConnMaxLifetime: defaultConnMaxLifetime,
 		ConnMaxIdleTime: defaultConnMaxIdleTime,
 	}
-}
-
-func setupDatabase(db *sql.DB) error {
-	err := applyDatabaseMigrations(db)
-	if err != nil {
-		return err
-	}
-	return nil
 }
