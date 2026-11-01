@@ -150,6 +150,9 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 	var result storage.UploadPartCopyResult
 	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		// Taken once the transaction holds its connection: waiting for the
+		// connection must not age the snapshot.
+		snapshotAt := database.SnapshotTime(ctx, mbs.db)
 		var srcObject *metadatastore.Object
 		var err error
 		if opts != nil && opts.SourceVersionID != nil {
@@ -217,10 +220,11 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			return nil
 		}
 
-		rangeReader, err := mbs.createRangeReader(ctx, tx, srcObject, normalizedRanges[0])
+		rangeReaders, err := mbs.openRangeReaders(ctx, tx, srcObject, normalizedRanges[:1], snapshotAt)
 		if err != nil {
 			return err
 		}
+		rangeReader := rangeReaders[0]
 		defer rangeReader.Close()
 
 		newPartId, err := partstore.NewRandomPartId()

@@ -448,6 +448,10 @@ func (e *erasureCodingPartStore) Capabilities() partstore.Capabilities {
 	for _, store := range e.partStores[1:] {
 		capabilities &= partstore.CapabilitiesOf(store)
 	}
+	// GetPart heals missing shards with PutPart in the caller's transaction.
+	if !capabilities.Has(partstore.CapabilityTxFreePutPart) {
+		capabilities &^= partstore.NewCapabilities(partstore.CapabilityTxFreeGetPart)
+	}
 	return capabilities
 }
 

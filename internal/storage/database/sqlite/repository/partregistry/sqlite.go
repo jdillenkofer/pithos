@@ -3,6 +3,7 @@ package partregistry
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -30,6 +31,7 @@ const (
 	forgetStmt                      = "DELETE FROM part_registry WHERE part_id = $1 AND orphaned AND ref_count = $2"
 	findUnreferencedStmt            = "SELECT part_id, part_store_name FROM part_registry WHERE ref_count = 0 AND part_id > $1 AND (unreferenced_at IS NULL OR unreferenced_at < $2) ORDER BY part_id LIMIT $3"
 	countPartsByPartIdStmt          = "SELECT COUNT(*) FROM parts WHERE part_id=$1"
+	findRefCountStmt                = "SELECT ref_count FROM part_registry WHERE part_id = $1"
 )
 
 func NewRepository() (partregistry.Repository, error) {
@@ -198,6 +200,15 @@ func (pr *sqliteRepository) Condemn(ctx context.Context, tx *sql.Tx, id partstor
 	}
 	n, err := r.RowsAffected()
 	return n == 1, err
+}
+
+func (pr *sqliteRepository) IsReferenced(ctx context.Context, tx *sql.Tx, id partstore.PartId) (bool, error) {
+	var refCount int64
+	err := tx.QueryRowContext(ctx, findRefCountStmt, id.String()).Scan(&refCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return refCount > 0, err
 }
 
 func (pr *sqliteRepository) Forget(ctx context.Context, tx *sql.Tx, id partstore.PartId) (bool, error) {

@@ -112,23 +112,24 @@ func (sdb *sqliteDatabase) SQLDBs() []*sql.DB { return []*sql.DB{sdb.readOnlyDb,
 func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxController, error) {
 	readOnly := opts != nil && opts.ReadOnly
 	if tx, ok := database.TxControllerFromContext(ctx); ok && tx.DBHandle() == sdb {
-		if !readOnly && tx.ReadOnly() {
-			return nil, database.ErrWriteInReadOnlyTransaction
-		}
-		return tx.Child(), nil
+		return tx.Nested(opts)
 	}
+	// SQLite transactions are always serializable; the driver ignores the
+	// requested level.
 	if readOnly {
 		tx, err := sdb.readOnlyDb.BeginTx(ctx, opts)
 		if err != nil {
 			return nil, err
 		}
-		return database.NewTxController(tx, sdb, readOnly), nil
+		return database.NewTxController(tx, sdb, readOnly).WithIsolation(sql.LevelSerializable), nil
 	}
 	tx, err := sdb.writeableDb.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	return database.NewTxController(tx, sdb, readOnly), nil
+	// Writers begin immediately and hold the only write lock, so they always
+	// read the latest committed state.
+	return database.NewTxController(tx, sdb, readOnly).WithStatementSnapshots(true).WithIsolation(sql.LevelSerializable), nil
 }
 
 func (sdb *sqliteDatabase) PingContext(ctx context.Context) error {

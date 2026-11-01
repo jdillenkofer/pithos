@@ -61,6 +61,9 @@ func applyDatabaseMigrations(dbUrl string) error {
 
 type pgxDatabase struct {
 	*sql.DB
+	// defaultIsolation is the server's default isolation level, which
+	// transactions that ask for no isolation level get.
+	defaultIsolation sql.IsolationLevel
 }
 
 func (d *pgxDatabase) SQLDBs() []*sql.DB { return []*sql.DB{d.DB} }
@@ -82,16 +85,19 @@ type ConnectionPoolConfiguration struct {
 func (d *pgxDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxController, error) {
 	readOnly := opts != nil && opts.ReadOnly
 	if tx, ok := database.TxControllerFromContext(ctx); ok && tx.DBHandle() == d {
-		if !readOnly && tx.ReadOnly() {
-			return nil, database.ErrWriteInReadOnlyTransaction
-		}
-		return tx.Child(), nil
+		return tx.Nested(opts)
 	}
 	tx, err := d.DB.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	return database.NewTxController(tx, d, readOnly), nil
+	isolation := d.defaultIsolation
+	if opts != nil && opts.Isolation != sql.LevelDefault {
+		isolation = opts.Isolation
+	}
+	// READ UNCOMMITTED behaves like READ COMMITTED on PostgreSQL.
+	statementSnapshots := isolation == sql.LevelReadCommitted || isolation == sql.LevelReadUncommitted
+	return database.NewTxController(tx, d, readOnly).WithStatementSnapshots(statementSnapshots).WithIsolation(isolation), nil
 }
 
 const oldestOpenTransactionStmt = "SELECT COUNT(*) FILTER (WHERE state IS NULL), EXTRACT(EPOCH FROM clock_timestamp() - MIN(xact_start))::FLOAT8 FROM pg_stat_activity WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
@@ -128,8 +134,36 @@ func OpenDatabase(dbUrl string, poolConfig *ConnectionPoolConfiguration) (*pgxDa
 		return nil, err
 	}
 	configureConnectionPool(db, poolConfig)
-	pgxDatabase := pgxDatabase{db}
+	defaultIsolation, err := readDefaultIsolation(db)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	pgxDatabase := pgxDatabase{DB: db, defaultIsolation: defaultIsolation}
 	return &pgxDatabase, nil
+}
+
+const defaultTransactionIsolationStmt = "SHOW default_transaction_isolation"
+
+// readDefaultIsolation reads the default isolation level once. It is set
+// per database or role, which every pooled connection shares.
+func readDefaultIsolation(db *sql.DB) (sql.IsolationLevel, error) {
+	var isolation string
+	if err := db.QueryRow(defaultTransactionIsolationStmt).Scan(&isolation); err != nil {
+		return sql.LevelDefault, fmt.Errorf("reading default transaction isolation: %w", err)
+	}
+	switch isolation {
+	case "read uncommitted":
+		return sql.LevelReadUncommitted, nil
+	case "read committed":
+		return sql.LevelReadCommitted, nil
+	case "repeatable read":
+		return sql.LevelRepeatableRead, nil
+	case "serializable":
+		return sql.LevelSerializable, nil
+	default:
+		return sql.LevelDefault, fmt.Errorf("unknown default transaction isolation %q", isolation)
+	}
 }
 
 func configureConnectionPool(db *sql.DB, poolConfigOverride *ConnectionPoolConfiguration) {
@@ -188,3 +222,4 @@ func defaultPoolConfiguration() ConnectionPoolConfiguration {
 		ConnMaxIdleTime: defaultConnMaxIdleTime,
 	}
 }
+

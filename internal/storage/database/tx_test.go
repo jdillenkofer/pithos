@@ -116,12 +116,15 @@ func TestNestedWritableTxInsideReadOnlyTxIsRejected(t *testing.T) {
 	db := openTestDB(t)
 	execTx(t, ctx, db, "CREATE TABLE tx_ro_guard (id INTEGER PRIMARY KEY)")
 
-	err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, _ database.Tx) error {
-		_, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-		return err
-	})
-	if !errors.Is(err, database.ErrWriteInReadOnlyTransaction) {
-		t.Fatalf("expected ErrWriteInReadOnlyTransaction, got %v", err)
+	// Nil options ask for a writable transaction too.
+	for _, opts := range []*sql.TxOptions{{ReadOnly: false}, nil} {
+		err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, _ database.Tx) error {
+			_, err := db.BeginTx(ctx, opts)
+			return err
+		})
+		if !errors.Is(err, database.ErrWriteInReadOnlyTransaction) {
+			t.Fatalf("expected ErrWriteInReadOnlyTransaction for options %+v, got %v", opts, err)
+		}
 	}
 }
 
