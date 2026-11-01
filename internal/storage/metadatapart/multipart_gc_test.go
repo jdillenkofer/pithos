@@ -3,6 +3,7 @@ package metadatapart
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestCompleteMultipartUploadWithSubsetReleasesUnusedPartsToGC(t *testing.T) 
 			upload, err := st.CreateMultipartUpload(ctx, bucket, key, nil, nil, nil)
 			require.NoError(t, err)
 
-			contents := map[int32]string{1: "first", 2: "unused second", 3: "third", 5: "fifth"}
+			contents := map[int32]string{1: strings.Repeat("a", 5*1024*1024), 2: "unused second", 3: strings.Repeat("b", 5*1024*1024), 5: "fifth"}
 			etags := map[int32]string{}
 			for _, partNumber := range []int32{1, 2, 3, 5} {
 				result, err := st.UploadPart(ctx, bucket, key, upload.UploadId, partNumber, bytes.NewReader([]byte(contents[partNumber])), nil)
@@ -61,7 +62,7 @@ func TestCompleteMultipartUploadWithSubsetReleasesUnusedPartsToGC(t *testing.T) 
 			result, err := st.CompleteMultipartUpload(ctx, bucket, key, upload.UploadId, nil, opts)
 			require.NoError(t, err)
 			require.Regexp(t, `-3"?$`, result.ETag)
-			require.Equal(t, "firstthirdfifth", readObjectContent(t, st, bucket, key, nil))
+			require.Equal(t, contents[1]+contents[3]+contents[5], readObjectContent(t, st, bucket, key, nil))
 
 			var stop atomic.Bool
 			done := make(chan struct{})
@@ -69,7 +70,7 @@ func TestCompleteMultipartUploadWithSubsetReleasesUnusedPartsToGC(t *testing.T) 
 			defer func() { stop.Store(true); <-done }()
 			require.Eventually(t, func() bool { return len(physicalPartIDs(t, st)) == 3 }, 5*time.Second, 5*time.Millisecond)
 			require.Equal(t, []int64{1, 1, 1}, registryRefCounts(t, st))
-			require.Equal(t, "firstthirdfifth", readObjectContent(t, st, bucket, key, nil))
+			require.Equal(t, contents[1]+contents[3]+contents[5], readObjectContent(t, st, bucket, key, nil))
 		})
 	}
 }

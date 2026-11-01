@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -52,7 +53,7 @@ func TestCompleteMultipartUploadChecksumPartNumbering(t *testing.T) {
 					// include gaps and must not invalidate a consecutive manifest.
 					parts := make(map[int32]*storage.UploadPartResult)
 					for _, number := range []int32{5, 3, 2, 1, 2} {
-						parts[number], err = st.UploadPart(ctx, bucket, key, upload.UploadId, number, bytes.NewBufferString(fmt.Sprint(number)), nil)
+						parts[number], err = st.UploadPart(ctx, bucket, key, upload.UploadId, number, bytes.NewBufferString(strings.Repeat(fmt.Sprint(number), 5*1024*1024)), nil)
 						require.NoError(t, err)
 					}
 					buildManifest := func(numbers []int32) []storage.CompleteMultipartUploadPart {
@@ -74,13 +75,13 @@ func TestCompleteMultipartUploadChecksumPartNumbering(t *testing.T) {
 						require.Len(t, listed.Parts, 4)
 						_, err = st.CompleteMultipartUpload(ctx, bucket, key, upload.UploadId, nil, &storage.CompleteMultipartUploadOptions{Parts: buildManifest([]int32{1, 2})})
 						require.NoError(t, err)
-						require.Equal(t, "12", readObjectContent(t, st, bucket, key, nil))
+						require.Equal(t, strings.Repeat("1", 5*1024*1024)+strings.Repeat("2", 5*1024*1024), readObjectContent(t, st, bucket, key, nil))
 						return
 					}
 					require.NoError(t, err)
 					wantContent := ""
 					for _, number := range numbers {
-						wantContent += fmt.Sprint(number)
+						wantContent += strings.Repeat(fmt.Sprint(number), 5*1024*1024)
 					}
 					require.Equal(t, wantContent, readObjectContent(t, st, bucket, key, nil))
 				})

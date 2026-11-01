@@ -194,7 +194,8 @@ func TestReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
 	require.NoError(t, coordinator.CreateBucket(ctx, bucket))
 	upload, err := coordinator.CreateMultipartUpload(ctx, bucket, source, nil, nil, nil)
 	require.NoError(t, err)
-	first, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 1, strings.NewReader("first"), nil)
+	firstBody := strings.Repeat("a", 5*1024*1024)
+	first, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 1, strings.NewReader(firstBody), nil)
 	require.NoError(t, err)
 	second, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 2, strings.NewReader("second"), nil)
 	require.NoError(t, err)
@@ -227,7 +228,7 @@ func TestReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
 	data, err := io.ReadAll(readers[0])
 	readers[0].Close()
 	require.NoError(t, err)
-	require.Equal(t, "firstsecond", string(data))
+	require.Equal(t, firstBody+"second", string(data))
 }
 
 func TestReplicationDoesNotInferAmbiguousMultipartCompletion(t *testing.T) {
@@ -249,7 +250,7 @@ func TestReplicationDoesNotInferAmbiguousMultipartCompletion(t *testing.T) {
 	require.NoError(t, coordinator.CreateBucket(ctx, bucket))
 	upload, err := coordinator.CreateMultipartUpload(ctx, bucket, source, nil, nil, nil)
 	require.NoError(t, err)
-	part1, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 1, strings.NewReader("first"), nil)
+	part1, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 1, strings.NewReader(strings.Repeat("a", 5*1024*1024)), nil)
 	require.NoError(t, err)
 	part2, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 2, strings.NewReader("second"), nil)
 	require.NoError(t, err)

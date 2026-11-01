@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -35,6 +36,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -62,7 +64,21 @@ var (
 	key         = aws.String(*keyPrefix + "/hello_world.txt")
 	key2        = aws.String(*keyPrefix + "/hello_world2.txt")
 	body        = []byte("Hello, world!")
+
+	// multipartPart1 and multipartPart2 split multipartBody into a non-final
+	// part of the minimum part size and a short last part.
+	multipartPart1 = padToMinPartSize(body[0:2])
+	multipartPart2 = body[2:]
+	multipartBody  = slices.Concat(multipartPart1, multipartPart2)
 )
+
+// minPartSize is the S3 minimum size of every multipart part but the last.
+const minPartSize = 5 * 1024 * 1024
+
+// padToMinPartSize pads content so it is accepted as a non-final multipart part.
+func padToMinPartSize(content []byte) []byte {
+	return append(bytes.Clone(content), bytes.Repeat([]byte("."), minPartSize-len(content))...)
+}
 
 func TestMain(m *testing.M) {
 	flag.Parse()

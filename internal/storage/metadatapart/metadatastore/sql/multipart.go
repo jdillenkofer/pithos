@@ -181,6 +181,8 @@ func declaredPartChecksumMatches(declared *string, stored *string) bool {
 	return *declared == *stored
 }
 
+const minimumMultipartPartSize int64 = 5 * 1024 * 1024
+
 // selectCompleteMultipartUploadParts checks the client-declared completion
 // manifest against the uploaded parts loaded in this transaction and returns
 // the declared parts in manifest order. Uploaded parts missing from the
@@ -314,6 +316,11 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	var totalSize int64 = 0
 	parts := make([]checksumutils.PartChecksums, len(selectedParts))
 	for i, partEntity := range selectedParts {
+		// Only the last part in the completion manifest is exempt, even if
+		// additional parts were uploaded but omitted from the manifest.
+		if i < len(selectedParts)-1 && partEntity.Size < minimumMultipartPartSize {
+			return nil, metadatastore.ErrEntityTooSmall
+		}
 		totalSize += partEntity.Size
 		parts[i] = checksumutils.PartChecksums{
 			ETag:              partEntity.ETag,
