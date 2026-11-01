@@ -275,7 +275,7 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 	defer span.End()
 	cutoff := time.Now().UTC().Add(-partGC.graceWindow)
 	var observations []partregistry.Reconciliation
-	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	if err := database.WithTxRetry(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		observations, err = partGC.partRegistryRepository.FindReconciliation(ctx, tx.SqlTx())
 		return err
@@ -293,7 +293,7 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 	for start := 0; start < len(drifted); start += gcBatchSize {
 		end := min(start+gcBatchSize, len(drifted))
 		var restored, recounted int
-		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		if err := database.WithTxRetry(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 			restored, recounted = 0, 0
 			for _, o := range drifted[start:end] {
 				if o.Version == nil {
@@ -323,7 +323,7 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 	}
 	// Pruning and backfill are idempotent and deliberately isolated from scans.
 	var pruned, backfilled int64
-	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	if err := database.WithTxRetry(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		indexed, err := partGC.partDedupIndexRepository.FindAllPartIds(ctx, tx.SqlTx())
 		if err != nil {
 			return err
@@ -359,7 +359,7 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 		return err
 	}
 	registered := make(map[partstore.PartId]struct{})
-	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	if err := database.WithTxRetry(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		rows, err := partGC.partRegistryRepository.FindAllEntities(ctx, tx.SqlTx())
 		if err != nil {
 			return err
@@ -374,7 +374,8 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 	numTrackedOrphans := 0
 	for name, store := range partGC.partStores.All() {
 		var untracked []partstore.PartId
-		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		if err := database.WithTxRetry(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+			untracked = nil
 			ids, err := store.GetPartIds(ctx, tx)
 			if err != nil {
 				return err
@@ -392,7 +393,7 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 		for start := 0; start < len(untracked); start += gcBatchSize {
 			end := min(start+gcBatchSize, len(untracked))
 			var batchTracked int
-			if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			if err := database.WithTxRetry(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 				batchTracked = 0
 				for _, id := range untracked[start:end] {
 					tracked, err := partGC.partRegistryRepository.TrackOrphan(ctx, tx.SqlTx(), id, storeName)
@@ -464,7 +465,7 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 	var after *partstore.PartId
 	for {
 		var candidates []partregistry.Unreferenced
-		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		if err := database.WithTxRetry(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 			var err error
 			candidates, err = partGC.partRegistryRepository.FindUnreferenced(ctx, tx.SqlTx(), cutoff, after, gcBatchSize)
 			return err
@@ -482,7 +483,7 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 		}
 		var external []externalDelete
 		var batchDeleted, batchUnknownStore int
-		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		if err := database.WithTxRetry(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 			external, batchDeleted, batchUnknownStore = nil, 0, 0
 			for _, candidate := range candidates {
 				store, err := partGC.partStores.ByName(candidate.StoreName)
@@ -537,7 +538,7 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 			deleted = append(deleted, d.id)
 		}
 		if len(deleted) > 0 {
-			if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			if err := database.WithTxRetry(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 				for _, id := range deleted {
 					if _, err := partGC.partRegistryRepository.Forget(ctx, tx.SqlTx(), id); err != nil {
 						return err

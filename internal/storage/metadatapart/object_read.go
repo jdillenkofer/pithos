@@ -54,7 +54,7 @@ func (mbs *metadataPartStorage) ListObjects(ctx context.Context, bucketName stor
 	defer span.End()
 
 	var mListBucketResult *metadatastore.ListBucketResult
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		mListBucketResult, err = mbs.metadataStore.ListObjects(ctx, tx.SqlTx(), bucketName, metadatastore.ListObjectsOptions{
 			Prefix:     opts.Prefix,
@@ -77,7 +77,7 @@ func (mbs *metadataPartStorage) ListObjectVersions(ctx context.Context, bucketNa
 	defer span.End()
 
 	var metaResult *metadatastore.ListObjectVersionsResult
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		metaResult, err = mbs.metadataStore.ListObjectVersions(ctx, tx.SqlTx(), bucketName, metadatastore.ListObjectVersionsOptions{
 			Prefix:          opts.Prefix,
@@ -110,7 +110,7 @@ func (mbs *metadataPartStorage) HeadObject(ctx context.Context, bucketName stora
 	defer span.End()
 
 	var mObject *metadatastore.Object
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		if opts != nil && opts.VersionID != nil {
 			mObject, err = mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), bucketName, key, *opts.VersionID)

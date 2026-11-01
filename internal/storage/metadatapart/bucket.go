@@ -13,7 +13,7 @@ import (
 func (mbs *metadataPartStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CreateBucket")
 	defer span.End()
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucketName, options...)
 	})
 }
@@ -21,7 +21,7 @@ func (mbs *metadataPartStorage) CreateBucket(ctx context.Context, bucketName sto
 func (mbs *metadataPartStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucket")
 	defer span.End()
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.DeleteBucket(ctx, tx.SqlTx(), bucketName)
 	})
 }
@@ -39,7 +39,7 @@ func (mbs *metadataPartStorage) ListBuckets(ctx context.Context) ([]storage.Buck
 	defer span.End()
 
 	var mBuckets []metadatastore.Bucket
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		mBuckets, err = mbs.metadataStore.ListBuckets(ctx, tx.SqlTx())
 		return err
@@ -56,7 +56,7 @@ func (mbs *metadataPartStorage) HeadBucket(ctx context.Context, bucketName stora
 	defer span.End()
 
 	var mBucket *metadatastore.Bucket
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		mBucket, err = mbs.metadataStore.HeadBucket(ctx, tx.SqlTx(), bucketName)
 		return err
@@ -74,7 +74,7 @@ func (mbs *metadataPartStorage) GetBucketWebsiteConfiguration(ctx context.Contex
 	defer span.End()
 
 	var config *storage.WebsiteConfiguration
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		config, err = mbs.metadataStore.GetBucketWebsiteConfiguration(ctx, tx.SqlTx(), bucketName)
 		return err
@@ -90,7 +90,7 @@ func (mbs *metadataPartStorage) PutBucketWebsiteConfiguration(ctx context.Contex
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketWebsiteConfiguration")
 	defer span.End()
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.PutBucketWebsiteConfiguration(ctx, tx.SqlTx(), bucketName, config)
 	})
 }
@@ -99,7 +99,7 @@ func (mbs *metadataPartStorage) DeleteBucketWebsiteConfiguration(ctx context.Con
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucketWebsiteConfiguration")
 	defer span.End()
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.DeleteBucketWebsiteConfiguration(ctx, tx.SqlTx(), bucketName)
 	})
 }
@@ -109,7 +109,7 @@ func (mbs *metadataPartStorage) GetBucketCORSConfiguration(ctx context.Context, 
 	defer span.End()
 
 	var config *storage.BucketCORSConfiguration
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		config, err = mbs.metadataStore.GetBucketCORSConfiguration(ctx, tx.SqlTx(), bucketName)
 		return err
@@ -125,7 +125,7 @@ func (mbs *metadataPartStorage) PutBucketCORSConfiguration(ctx context.Context, 
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketCORSConfiguration")
 	defer span.End()
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.PutBucketCORSConfiguration(ctx, tx.SqlTx(), bucketName, config)
 	})
 }
@@ -134,7 +134,7 @@ func (mbs *metadataPartStorage) DeleteBucketCORSConfiguration(ctx context.Contex
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucketCORSConfiguration")
 	defer span.End()
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.DeleteBucketCORSConfiguration(ctx, tx.SqlTx(), bucketName)
 	})
 }
@@ -144,7 +144,7 @@ func (mbs *metadataPartStorage) GetBucketLifecycleConfiguration(ctx context.Cont
 	defer span.End()
 
 	var config *storage.BucketLifecycleConfiguration
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		config, err = mbs.metadataStore.GetBucketLifecycleConfiguration(ctx, tx.SqlTx(), bucketName)
 		return err
@@ -160,7 +160,7 @@ func (mbs *metadataPartStorage) PutBucketLifecycleConfiguration(ctx context.Cont
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketLifecycleConfiguration")
 	defer span.End()
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.PutBucketLifecycleConfiguration(ctx, tx.SqlTx(), bucketName, config)
 	})
 }
@@ -169,7 +169,7 @@ func (mbs *metadataPartStorage) DeleteBucketLifecycleConfiguration(ctx context.C
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucketLifecycleConfiguration")
 	defer span.End()
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.DeleteBucketLifecycleConfiguration(ctx, tx.SqlTx(), bucketName)
 	})
 }
@@ -179,7 +179,7 @@ func (mbs *metadataPartStorage) GetBucketNotificationConfiguration(ctx context.C
 	defer span.End()
 
 	var config *storage.BucketNotificationConfiguration
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		config, err = mbs.metadataStore.GetBucketNotificationConfiguration(ctx, tx.SqlTx(), bucketName)
 		return err
@@ -195,7 +195,7 @@ func (mbs *metadataPartStorage) PutBucketNotificationConfiguration(ctx context.C
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketNotificationConfiguration")
 	defer span.End()
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.PutBucketNotificationConfiguration(ctx, tx.SqlTx(), bucketName, config)
 	})
 }
@@ -205,7 +205,7 @@ func (mbs *metadataPartStorage) GetBucketVersioningConfiguration(ctx context.Con
 	defer span.End()
 
 	var config *metadatastore.BucketVersioningConfiguration
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		config, err = mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName)
 		return err
@@ -231,7 +231,7 @@ func (mbs *metadataPartStorage) PutBucketVersioningConfiguration(ctx context.Con
 		metaConfig.Status = &status
 	}
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.PutBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName, metaConfig)
 	})
 }

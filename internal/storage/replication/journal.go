@@ -176,7 +176,7 @@ func (rs *replicationStorage) Start(ctx context.Context) error {
 	if lifecycle.IsDryRun(ctx) {
 		return nil
 	}
-	if err := database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+	if err := database.WithTxRetry(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
 		return rs.journal.RegisterTopology(ctx, tx.SqlTx(), rs.options.ReplicationID, rs.options.SecondaryIDs)
 	}); err != nil {
 		return err
@@ -230,7 +230,7 @@ func (rs *replicationStorage) Stop(ctx context.Context) error {
 
 func (rs *replicationStorage) mapping(ctx context.Context, secondary, bucket, key, kind, id string) (string, error) {
 	var mapped *string
-	err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		mapped, err = rs.journal.FindMapping(ctx, tx.SqlTx(), replicationjournal.Mapping{ReplicationID: rs.options.ReplicationID, SecondaryID: secondary, Bucket: bucket, Key: key, Kind: kind, PrimaryID: id})
 		return err
@@ -473,7 +473,7 @@ func (rs *replicationStorage) finalizePrimary(ctx context.Context, tx database.T
 func (rs *replicationStorage) replayPending(ctx context.Context) error {
 	ctx = storage.WithObjectLockObserver(ctx, nil)
 	var ops []replicationjournal.Operation
-	err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		ops, err = rs.journal.Pending(ctx, tx.SqlTx(), rs.options.ReplicationID)
 		return err
@@ -531,7 +531,7 @@ func (rs *replicationStorage) recordFailure(ctx context.Context, op *replication
 	op.LastError = cause.Error()
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	err := database.WithTx(saveCtx, rs.db, nil, func(ctx context.Context, tx database.Tx) error { return rs.journal.SaveOperation(ctx, tx.SqlTx(), op) })
+	err := database.WithTxRetry(saveCtx, rs.db, nil, func(ctx context.Context, tx database.Tx) error { return rs.journal.SaveOperation(ctx, tx.SqlTx(), op) })
 	return errors.Join(fmt.Errorf("replication operation %s pending: %w", op.ID, cause), err)
 }
 
@@ -549,7 +549,7 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 		return err
 	}
 	var acks map[string]string
-	if err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	if err := database.WithTxRetry(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		acks, err = rs.journal.Acknowledgments(ctx, tx.SqlTx(), op.ID)
 		return err
@@ -625,7 +625,7 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 		if err != nil {
 			return err
 		}
-		err = database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+		err = database.WithTxRetry(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
 			if primary.VersionID != nil && result.VersionID != nil {
 				if err := rs.journal.SaveMapping(ctx, tx.SqlTx(), replicationjournal.Mapping{ReplicationID: rs.options.ReplicationID, SecondaryID: id, Bucket: p.Bucket, Key: p.Key, Kind: "VERSION", PrimaryID: *primary.VersionID, SecondaryObjectID: *result.VersionID}); err != nil {
 					return err
@@ -647,7 +647,7 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 	}
 	op.State = "COMPLETE"
 	op.LastError = ""
-	return database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
 		if err := rs.journal.SaveOperation(ctx, tx.SqlTx(), op); err != nil {
 			return err
 		}
@@ -720,7 +720,7 @@ func (rs *replicationStorage) translate(ctx context.Context, id string, p *opera
 
 func (rs *replicationStorage) loadSnapshotProgress(ctx context.Context, operationID, secondaryID string) (*multipartSnapshotProgress, error) {
 	var encoded *string
-	err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		encoded, err = rs.journal.FindProgress(ctx, tx.SqlTx(), operationID, secondaryID)
 		return err
@@ -740,7 +740,7 @@ func (rs *replicationStorage) saveSnapshotProgress(ctx context.Context, operatio
 	if err != nil {
 		return err
 	}
-	return database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
 		return rs.journal.SaveProgress(ctx, tx.SqlTx(), operationID, secondaryID, string(encoded))
 	})
 }
@@ -974,7 +974,7 @@ func (rs *replicationStorage) finishRejected(ctx context.Context, op *replicatio
 	op.Attempts++
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	err := database.WithTx(saveCtx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(saveCtx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
 		if err := rs.journal.SaveOperation(ctx, tx.SqlTx(), op); err != nil {
 			return err
 		}
@@ -995,7 +995,7 @@ func (rs *replicationStorage) markIndeterminatePrimary(ctx context.Context, op *
 	op.Attempts++
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	return database.WithTx(saveCtx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(saveCtx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
 		if err := rs.journal.SaveOperation(ctx, tx.SqlTx(), op); err != nil {
 			return err
 		}

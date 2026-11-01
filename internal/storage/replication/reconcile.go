@@ -43,7 +43,7 @@ func (rs *replicationStorage) Reconcile(ctx context.Context, buckets []storage.B
 // from the authoritative primary version list.
 func (rs *replicationStorage) discardIndeterminateReplicaCompletions(ctx context.Context) error {
 	var ops []replicationjournal.Operation
-	if err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	if err := database.WithTxRetry(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		ops, err = rs.journal.Pending(ctx, tx.SqlTx(), rs.options.ReplicationID)
 		return err
@@ -56,7 +56,7 @@ func (rs *replicationStorage) discardIndeterminateReplicaCompletions(ctx context
 			continue
 		}
 		op.State = "COMPLETE"
-		if err := database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+		if err := database.WithTxRetry(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
 			if err := rs.journal.SaveOperation(ctx, tx.SqlTx(), op); err != nil {
 				return err
 			}

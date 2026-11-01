@@ -94,7 +94,7 @@ func (t *TxController) Commit(ctx context.Context) error {
 	t.finalized = true
 	for _, fn := range t.onAfterCommit {
 		if hookErr := fn(ctx); hookErr != nil {
-			return hookErr
+			return &afterCommitError{err: hookErr}
 		}
 	}
 	return nil
@@ -120,6 +120,27 @@ func TxControllerFromContext(ctx context.Context) (*TxController, bool) {
 		return nil, false
 	}
 	return tx, true
+}
+
+// AmbientTx returns the transaction in ctx that BeginTx on db reuses, if
+// any. A transaction of db or of a database db wraps counts, because
+// wrappers reuse it in BeginTx; one of another database does not.
+func AmbientTx(ctx context.Context, db Database) (*TxController, bool) {
+	tx, ok := TxControllerFromContext(ctx)
+	if !ok {
+		return nil, false
+	}
+	for db != nil {
+		if tx.DBHandle() == any(db) {
+			return tx, true
+		}
+		unwrapper, ok := db.(interface{ UnwrapDatabase() Database })
+		if !ok {
+			break
+		}
+		db = unwrapper.UnwrapDatabase()
+	}
+	return nil, false
 }
 
 func WithTx(ctx context.Context, db Database, opts *sql.TxOptions, fn func(ctx context.Context, tx Tx) error) error {

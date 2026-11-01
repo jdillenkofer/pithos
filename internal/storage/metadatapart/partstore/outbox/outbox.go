@@ -152,7 +152,7 @@ func New(db database.Database, outboxId string, innerPartStore partstore.PartSto
 func (obs *outboxPartStore) claimNextOutboxEntry(ctx context.Context) (*partOutboxEntry.Entity, bool, error) {
 	var entry *partOutboxEntry.Entity
 	var claimed bool
-	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		now := time.Now().UTC()
 		var err error
 		entry, claimed, err = obs.partOutboxEntryRepository.ClaimFirstPartOutboxEntry(ctx, tx.SqlTx(), obs.outboxId, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
@@ -166,7 +166,7 @@ func (obs *outboxPartStore) claimNextOutboxEntry(ctx context.Context) (*partOutb
 
 func (obs *outboxPartStore) releasePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
 	var released bool
-	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		released, err = obs.partOutboxEntryRepository.ReleasePartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, time.Now().UTC())
 		return err
@@ -179,7 +179,7 @@ func (obs *outboxPartStore) releasePartOutboxEntry(ctx context.Context, entry *p
 
 func (obs *outboxPartStore) finalizePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
 	var deleted bool
-	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		deleted, err = obs.partOutboxEntryRepository.DeletePartOutboxEntryByClaimOwner(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner)
 		return err
@@ -208,7 +208,7 @@ func (obs *outboxPartStore) startPartOutboxHeartbeat(ctx context.Context, entry 
 			case <-ticker.C:
 				now := time.Now().UTC()
 				var extended bool
-				err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+				err := database.WithTxRetry(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 					var err error
 					extended, err = obs.partOutboxEntryRepository.ExtendPartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
 					return err
@@ -275,7 +275,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 	}()
 
 	var oldestEntry *partOutboxEntry.Entity
-	if err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	if err := database.WithTxRetry(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		pendingCount, err = obs.partOutboxEntryRepository.Count(ctx, tx.SqlTx(), obs.outboxId)
 		if err != nil {

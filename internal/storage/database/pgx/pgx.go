@@ -12,6 +12,8 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -92,6 +94,16 @@ func (d *pgxDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*databa
 		return nil, err
 	}
 	return database.NewTxController(tx, d, readOnly), nil
+}
+
+// IsRetryableTxError reports serialization failures and deadlocks, which
+// PostgreSQL resolves by aborting one of the conflicting transactions.
+func (d *pgxDatabase) IsRetryableTxError(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == pgerrcode.SerializationFailure || pgErr.Code == pgerrcode.DeadlockDetected
 }
 
 const oldestOpenTransactionStmt = "SELECT COUNT(*) FILTER (WHERE state IS NULL), EXTRACT(EPOCH FROM clock_timestamp() - MIN(xact_start))::FLOAT8 FROM pg_stat_activity WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()"

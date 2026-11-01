@@ -39,7 +39,7 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 		}
 	}
 	var initiateMultipartUploadResult storage.InitiateMultipartUploadResult
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx.SqlTx(), bucketName, key, contentType, checksumType, metadataOpts)
 		if err != nil {
 			return err
@@ -283,7 +283,7 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CompleteMultipartUpload")
 	defer span.End()
 	var completeMultipartUploadResult storage.CompleteMultipartUploadResult
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId, checksumInput, opts)
 		if err != nil {
 			return err
@@ -300,7 +300,7 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 func (mbs *metadataPartStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.AbortMultipartUpload")
 	defer span.End()
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.AbortMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId)
 	})
 }
@@ -337,7 +337,7 @@ func (mbs *metadataPartStorage) ListMultipartUploads(ctx context.Context, bucket
 	defer span.End()
 
 	var mListMultipartUploadsResult *metadatastore.ListMultipartUploadsResult
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		mListMultipartUploadsResult, err = mbs.metadataStore.ListMultipartUploads(ctx, tx.SqlTx(), bucketName, metadatastore.ListMultipartUploadsOptions{
 			Prefix:         opts.Prefix,
@@ -393,7 +393,7 @@ func (mbs *metadataPartStorage) ListParts(ctx context.Context, bucketName storag
 
 	var mListPartsResult *metadatastore.ListPartsResult
 	var lifecycleConfig *storage.BucketLifecycleConfiguration
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		mListPartsResult, err = mbs.metadataStore.ListParts(ctx, tx.SqlTx(), bucketName, key, uploadId, metadatastore.ListPartsOptions{
 			PartNumberMarker: opts.PartNumberMarker,

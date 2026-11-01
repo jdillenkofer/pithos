@@ -25,7 +25,11 @@ import (
 type StorageMiddleware struct {
 	delegator.DelegatingStorage
 	*lifecycle.ValidatedLifecycle
-	db                 database.Database
+	db database.Database
+	// sharesInnerTx is set when the wrapped storage writes in the same
+	// transaction as the outbox, so a mutation and its events commit or
+	// roll back together.
+	sharesInnerTx      bool
 	repository         Repository
 	publisher          Publisher
 	outboxID           string
@@ -89,10 +93,12 @@ func NewStorageMiddleware(inner storage.Storage, db database.Database, repositor
 	if err != nil {
 		return nil, err
 	}
+	sharesInnerTx := false
 	if dbStorage, ok := inner.(databaseBackedStorage); ok {
 		innerDB := dbStorage.Database()
 		if sameDatabaseHandle(innerDB, db) {
 			db = innerDB
+			sharesInnerTx = true
 		}
 	}
 	if claimLeaseDuration <= 0 {
@@ -105,6 +111,7 @@ func NewStorageMiddleware(inner storage.Storage, db database.Database, repositor
 		DelegatingStorage:  delegator.Wrap(inner),
 		ValidatedLifecycle: validatedLifecycle,
 		db:                 db,
+		sharesInnerTx:      sharesInnerTx,
 		repository:         repository,
 		publisher:          publisher,
 		outboxID:           outboxID,
@@ -251,7 +258,7 @@ func (m *StorageMiddleware) CopyObject(ctx context.Context, srcBucket storage.Bu
 
 func (m *StorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, uploadID storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	var result *storage.CompleteMultipartUploadResult
-	err := m.runWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
+	err := m.runReplayableWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
 		var err error
 		result, err = m.Next.CompleteMultipartUpload(ctx, bucket, key, uploadID, checksumInput, opts)
 		if err != nil {
@@ -273,7 +280,7 @@ func (m *StorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucket 
 
 func (m *StorageMiddleware) DeleteObject(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	var result *storage.DeleteObjectResult
-	err := m.runWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
+	err := m.runReplayableWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
 		var err error
 		result, err = m.Next.DeleteObject(ctx, bucket, key, opts)
 		if err != nil {
@@ -303,7 +310,7 @@ func (m *StorageMiddleware) DeleteObject(ctx context.Context, bucket storage.Buc
 
 func (m *StorageMiddleware) DeleteObjects(ctx context.Context, bucket storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	var result *storage.DeleteObjectsResult
-	err := m.runWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
+	err := m.runReplayableWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
 		var err error
 		result, err = m.Next.DeleteObjects(ctx, bucket, entries)
 		if err != nil {
@@ -338,7 +345,7 @@ func (m *StorageMiddleware) DeleteObjects(ctx context.Context, bucket storage.Bu
 }
 
 func (m *StorageMiddleware) PutObjectTagging(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
-	return m.runWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
+	return m.runReplayableWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
 		if err := m.Next.PutObjectTagging(ctx, bucket, key, tags, opts); err != nil {
 			return nil, err
 		}
@@ -352,7 +359,7 @@ func (m *StorageMiddleware) PutObjectTagging(ctx context.Context, bucket storage
 }
 
 func (m *StorageMiddleware) DeleteObjectTagging(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
-	return m.runWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
+	return m.runReplayableWithNotifications(ctx, func(ctx context.Context) ([]ObjectEvent, error) {
 		if err := m.Next.DeleteObjectTagging(ctx, bucket, key, opts); err != nil {
 			return nil, err
 		}
@@ -435,6 +442,23 @@ func destinationFor(p Publisher, arn string) (Destination, bool) {
 // mutation (the mutation has already committed before enqueue runs).
 func (m *StorageMiddleware) runWithNotifications(ctx context.Context, mutate func(ctx context.Context) ([]ObjectEvent, error)) error {
 	return database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		events, err := mutate(ctx)
+		if err != nil {
+			return err
+		}
+		return m.enqueueEvents(ctx, tx, events)
+	})
+}
+
+// runReplayableWithNotifications is runWithNotifications for a mutate that
+// is safe to run again. It retries transaction conflicts only when the
+// mutation shares the transaction: a mutation committed on its own must not
+// run twice.
+func (m *StorageMiddleware) runReplayableWithNotifications(ctx context.Context, mutate func(ctx context.Context) ([]ObjectEvent, error)) error {
+	if !m.sharesInnerTx {
+		return m.runWithNotifications(ctx, mutate)
+	}
+	return database.WithTxRetry(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		events, err := mutate(ctx)
 		if err != nil {
 			return err
@@ -586,7 +610,7 @@ func (m *StorageMiddleware) claimBatch(ctx context.Context) []*OutboxEntry {
 }
 
 func (m *StorageMiddleware) refreshGauges(ctx context.Context) {
-	err := database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, m.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		pending, err := m.repository.CountPending(ctx, tx.SqlTx(), m.outboxID)
 		if err != nil {
 			return err
@@ -650,7 +674,7 @@ func (m *StorageMiddleware) claim(ctx context.Context) (*OutboxEntry, bool, erro
 	var entry *OutboxEntry
 	var claimed bool
 	now := time.Now().UTC()
-	err := database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		entry, claimed, err = m.repository.ClaimFirst(ctx, tx.SqlTx(), m.outboxID, m.claimOwner, now, now.Add(m.claimLeaseDuration))
 		return err
@@ -659,7 +683,7 @@ func (m *StorageMiddleware) claim(ctx context.Context) (*OutboxEntry, bool, erro
 }
 
 func (m *StorageMiddleware) deleteClaimed(ctx context.Context, entry *OutboxEntry) error {
-	return database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		_, err := m.repository.DeleteByClaimOwner(ctx, tx.SqlTx(), m.outboxID, *entry.ID, m.claimOwner)
 		return err
 	})
@@ -681,14 +705,14 @@ func (m *StorageMiddleware) nextAttemptAt(entry *OutboxEntry) time.Time {
 }
 
 func (m *StorageMiddleware) release(ctx context.Context, entry *OutboxEntry, nextAttemptAt time.Time, cause error) error {
-	return database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		_, err := m.repository.ReleaseClaim(ctx, tx.SqlTx(), m.outboxID, *entry.ID, m.claimOwner, nextAttemptAt, time.Now().UTC(), errorMessage(cause))
 		return err
 	})
 }
 
 func (m *StorageMiddleware) deadLetter(ctx context.Context, entry *OutboxEntry, cause error) error {
-	return database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		_, err := m.repository.DeadLetter(ctx, tx.SqlTx(), m.outboxID, *entry.ID, m.claimOwner, time.Now().UTC(), errorMessage(cause))
 		return err
 	})

@@ -40,7 +40,7 @@ func (mbs *metadataPartStorage) reclaimWrittenParts(ctx context.Context, txErr e
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reclaimTimeout)
 	defer cancel()
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		for _, part := range written {
 			if err := mbs.metadataStore.RegisterUnreferencedPart(ctx, tx.SqlTx(), part.id, part.storeName); err != nil {
 				return err

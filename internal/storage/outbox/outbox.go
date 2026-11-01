@@ -147,7 +147,7 @@ func (os *outboxStorage) WithTransaction(ctx context.Context, opts *sql.TxOption
 func (os *outboxStorage) claimNextOutboxEntry(ctx context.Context) (*storageOutboxEntry.Entity, bool, error) {
 	var entry *storageOutboxEntry.Entity
 	var claimed bool
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		now := time.Now().UTC()
 		var err error
 		entry, claimed, err = os.storageOutboxEntryRepository.ClaimFirstStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId, os.claimOwner, now, now.Add(os.claimLeaseDuration))
@@ -164,7 +164,7 @@ func (os *outboxStorage) readStorageOutboxChunks(ctx context.Context, entry *sto
 		return nil, nil
 	}
 	var chunks []*storageOutboxEntry.ContentChunk
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		chunks, err = os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
 		return err
@@ -186,7 +186,7 @@ func (os *outboxStorage) readStorageOutboxPutOptions(ctx context.Context, entry 
 		return nil, nil
 	}
 	var putOptions *storageOutboxEntry.PutOptions
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		putOptions, err = os.storageOutboxEntryRepository.FindStorageOutboxEntryPutOptionsById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
 		return err
@@ -206,7 +206,7 @@ func (os *outboxStorage) readStorageOutboxCreateBucketOptions(ctx context.Contex
 		return nil, nil
 	}
 	var persisted *storageOutboxEntry.CreateBucketOptions
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		persisted, err = os.storageOutboxEntryRepository.FindStorageOutboxEntryCreateBucketOptionsById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
 		return err
@@ -219,7 +219,7 @@ func (os *outboxStorage) readStorageOutboxCreateBucketOptions(ctx context.Contex
 
 func (os *outboxStorage) finalizeStorageOutboxEntry(ctx context.Context, entry *storageOutboxEntry.Entity) (bool, error) {
 	var deleted bool
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		deleted, err = os.storageOutboxEntryRepository.DeleteStorageOutboxEntryByClaimOwner(ctx, tx.SqlTx(), os.outboxId, *entry.Id, os.claimOwner)
 		return err
@@ -232,7 +232,7 @@ func (os *outboxStorage) finalizeStorageOutboxEntry(ctx context.Context, entry *
 
 func (os *outboxStorage) releaseStorageOutboxEntry(ctx context.Context, entry *storageOutboxEntry.Entity) (bool, error) {
 	var released bool
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		released, err = os.storageOutboxEntryRepository.ReleaseStorageOutboxEntryClaim(ctx, tx.SqlTx(), os.outboxId, *entry.Id, os.claimOwner, time.Now().UTC())
 		return err
@@ -261,7 +261,7 @@ func (os *outboxStorage) startStorageOutboxHeartbeat(ctx context.Context, entry 
 			case <-ticker.C:
 				now := time.Now().UTC()
 				var extended bool
-				err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+				err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 					var err error
 					extended, err = os.storageOutboxEntryRepository.ExtendStorageOutboxEntryClaim(ctx, tx.SqlTx(), os.outboxId, *entry.Id, os.claimOwner, now, now.Add(os.claimLeaseDuration))
 					return err
@@ -325,7 +325,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	}()
 
 	var oldestEntry *storageOutboxEntry.Entity
-	if err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	if err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		pendingCount, err = os.storageOutboxEntryRepository.Count(ctx, tx.SqlTx(), os.outboxId)
 		if err != nil {
@@ -562,7 +562,7 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 		return os.innerStorage.CreateBucket(ctx, bucketName, options...)
 	}
 
-	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		id, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil, nil)
 		if err != nil {
 			return err
@@ -592,7 +592,7 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.Bu
 		return os.innerStorage.DeleteBucket(ctx, bucketName)
 	}
 
-	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "", nil, nil)
 		return err
 	})
@@ -606,7 +606,7 @@ type storageOutboxEntryFinder func(ctx context.Context, tx *sql.Tx) (*storageOut
 // the oldest matching entry is newer than that snapshot (or none is left).
 func (os *outboxStorage) waitUntilOutboxEntriesDrained(ctx context.Context, findLast storageOutboxEntryFinder, findFirst storageOutboxEntryFinder) error {
 	var lastStorageOutboxEntry *storageOutboxEntry.Entity
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		lastStorageOutboxEntry, err = findLast(ctx, tx.SqlTx())
 		return err
@@ -625,7 +625,7 @@ func (os *outboxStorage) waitUntilOutboxEntriesDrained(ctx context.Context, find
 
 	for {
 		var entry *storageOutboxEntry.Entity
-		err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 			var err error
 			entry, err = findFirst(ctx, tx.SqlTx())
 			return err
@@ -961,7 +961,7 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	if opts != nil {
 		versionID = opts.VersionID
 	}
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String(), nil, versionID)
 		return err
 	})
@@ -1013,7 +1013,7 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 		return os.innerStorage.DeleteObjects(ctx, bucketName, entries)
 	}
 
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		for _, entry := range entries {
 			_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String(), nil, entry.VersionID)
 			if err != nil {
@@ -1279,7 +1279,7 @@ func (os *outboxStorage) PutBucketTagging(ctx context.Context, bucketName storag
 	if err != nil {
 		return err
 	}
-	return database.WithTx(ctx, os.db, nil, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, os.db, nil, func(ctx context.Context, tx database.Tx) error {
 		id, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutBucketTaggingStorageOperation, bucketName, "", nil, nil)
 		if err != nil {
 			return err
@@ -1289,7 +1289,7 @@ func (os *outboxStorage) PutBucketTagging(ctx context.Context, bucketName storag
 }
 
 func (os *outboxStorage) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
-	return database.WithTx(ctx, os.db, nil, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, os.db, nil, func(ctx context.Context, tx database.Tx) error {
 		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketTaggingStorageOperation, bucketName, "", nil, nil)
 		return err
 	})

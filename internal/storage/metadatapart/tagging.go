@@ -45,7 +45,7 @@ func (mbs *metadataPartStorage) GetObjectTagging(ctx context.Context, bucketName
 	defer span.End()
 
 	var tags map[string]string
-	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		if err := mbs.validateTaggingTarget(ctx, tx, bucketName, key, opts); err != nil {
 			return err
@@ -65,7 +65,7 @@ func (mbs *metadataPartStorage) PutObjectTagging(ctx context.Context, bucketName
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutObjectTagging")
 	defer span.End()
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		if err := mbs.validateTaggingTarget(ctx, tx, bucketName, key, opts); err != nil {
 			return err
 		}
@@ -78,7 +78,7 @@ func (mbs *metadataPartStorage) DeleteObjectTagging(ctx context.Context, bucketN
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObjectTagging")
 	defer span.End()
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	return database.WithTxRetry(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		if err := mbs.validateTaggingTarget(ctx, tx, bucketName, key, opts); err != nil {
 			return err
 		}

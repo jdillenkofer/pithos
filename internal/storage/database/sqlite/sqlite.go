@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -129,6 +130,16 @@ func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*d
 		return nil, err
 	}
 	return database.NewTxController(tx, sdb, readOnly), nil
+}
+
+// IsRetryableTxError reports a database still locked after the busy
+// timeout, which another connection held.
+func (sdb *sqliteDatabase) IsRetryableTxError(err error) bool {
+	var sqliteErr gosqlite3.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	return sqliteErr.Code == gosqlite3.ErrBusy || sqliteErr.Code == gosqlite3.ErrLocked
 }
 
 func (sdb *sqliteDatabase) PingContext(ctx context.Context) error {
