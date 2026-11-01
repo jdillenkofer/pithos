@@ -449,3 +449,36 @@ func TestErasureCodingPartStoreRoundtripsEdgeSizes(t *testing.T) {
 		assert.True(t, bytes.Equal(data, out), "size %d", size)
 	}
 }
+
+type capabilityPartStore struct {
+	partstore.PartStore
+	capabilities partstore.Capabilities
+}
+
+func (s capabilityPartStore) Capabilities() partstore.Capabilities { return s.capabilities }
+
+func TestErasureCodingPartStoreReadsTxFreeOnlyIfItCanHealTxFree(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	readOnly := partstore.NewCapabilities(partstore.CapabilityTxFreeGetPart)
+	readWrite := partstore.NewCapabilities(partstore.CapabilityTxFreeGetPart, partstore.CapabilityTxFreePutPart)
+	for _, tc := range []struct {
+		name     string
+		shards   []partstore.Capabilities
+		expected partstore.Capabilities
+	}{
+		{name: "tx-free reads and writes", shards: []partstore.Capabilities{readWrite, readWrite, readWrite}, expected: readWrite},
+		{name: "tx-free reads only", shards: []partstore.Capabilities{readOnly, readOnly, readOnly}, expected: 0},
+		{name: "one shard reads tx-free only", shards: []partstore.Capabilities{readWrite, readOnly, readWrite}, expected: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stores := make([]partstore.PartStore, len(tc.shards))
+			for i, capabilities := range tc.shards {
+				stores[i] = capabilityPartStore{capabilities: capabilities}
+			}
+			ec, err := NewWithPartStores(2, 1, 64*1024, stores, WithHealScanInterval(0))
+			assert.Nil(t, err)
+			assert.Equal(t, tc.expected, partstore.CapabilitiesOf(ec))
+		})
+	}
+}

@@ -21,6 +21,9 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 	var result storage.CopyObjectResult
 	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		// Taken once the transaction holds its connection: waiting for the
+		// connection must not age the snapshot.
+		snapshotAt := database.SnapshotTime(ctx, mbs.db)
 		var srcObject *metadatastore.Object
 		var err error
 		if opts != nil && opts.SourceVersionID != nil {
@@ -71,10 +74,11 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			if err != nil {
 				return err
 			}
-			rangeReader, err := mbs.createRangeReader(ctx, tx, srcObject, normalizedRanges[0])
+			rangeReaders, err := mbs.openRangeReaders(ctx, tx, srcObject, normalizedRanges[:1], snapshotAt)
 			if err != nil {
 				return err
 			}
+			rangeReader := rangeReaders[0]
 			defer rangeReader.Close()
 
 			newPartId, err := partstore.NewRandomPartId()
@@ -119,6 +123,8 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			// parts are copied because a part id belongs to exactly one store.
 			newParts := make([]metadatastore.Part, len(srcObject.Parts))
 			sharedPartIDs := make([]partstore.PartId, 0, len(srcObject.Parts))
+			lease := mbs.readerLeases.begin(ctx, snapshotAt, crossStorePartIds(srcObject.Parts, dstStoreName))
+			defer lease.done()
 			for i, srcPart := range srcObject.Parts {
 				if partStoreNamesEqual(srcPart.StoreName, dstStoreName) {
 					newParts[i] = srcPart
@@ -155,6 +161,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				if err != nil {
 					return err
 				}
+				srcReader = lease.wrap(srcReader)
 				written.add(dstStoreName, *newPartId)
 				err = dstStore.PutPart(ctx, tx, *newPartId, srcReader)
 				srcReader.Close()

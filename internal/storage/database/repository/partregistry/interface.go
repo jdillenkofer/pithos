@@ -56,6 +56,10 @@ type Repository interface {
 	// deletion is retried by the next sweep and the id is never resurrected.
 	// Missing rows become orphaned rows for the same reason.
 	Condemn(ctx context.Context, tx *sql.Tx, partId partstore.PartId, cutoff time.Time) (bool, error)
+	// IsReferenced reports whether metadata references partId. A referenced
+	// part has not started its retention, so GC cannot condemn it before the
+	// grace window after a later dereference.
+	IsReferenced(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (bool, error)
 	// Forget deletes a condemned row once its physical part is gone.
 	Forget(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (bool, error)
 	// FindUnreferenced returns up to limit zero-reference rows after the given

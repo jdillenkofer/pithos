@@ -36,7 +36,7 @@ func TestCompleteMultipartUploadWithSubsetReleasesUnusedPartsToGC(t *testing.T) 
 			require.NoError(t, err)
 			dedup, err := repositoryfactory.NewPartDedupIndexRepository(st.db)
 			require.NoError(t, err)
-			collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, 5*time.Millisecond, 5*time.Millisecond)
+			collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, st.readerLeases.store, 5*time.Millisecond, 5*time.Millisecond)
 			require.NoError(t, err)
 
 			bucket := storage.MustNewBucketName("bucket")

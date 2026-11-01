@@ -36,7 +36,7 @@ func TestDedupDuplicateIsReclaimedByGC(t *testing.T) {
 			require.NoError(t, err)
 			dedup, err := repositoryfactory.NewPartDedupIndexRepository(st.db)
 			require.NoError(t, err)
-			collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, time.Hour, 5*time.Millisecond)
+			collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, st.readerLeases.store, time.Hour, 5*time.Millisecond)
 			require.NoError(t, err)
 
 			bucket := storage.MustNewBucketName("bucket")
@@ -76,7 +76,7 @@ func TestFailedWritePartIsReclaimedByGC(t *testing.T) {
 	require.NoError(t, err)
 	dedup, err := repositoryfactory.NewPartDedupIndexRepository(st.db)
 	require.NoError(t, err)
-	collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, time.Hour, 5*time.Millisecond)
+	collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, st.readerLeases.store, time.Hour, 5*time.Millisecond)
 	require.NoError(t, err)
 
 	coldName := "cold"

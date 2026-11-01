@@ -9,11 +9,13 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
 
 var _ storage.IntegrityInspector = (*metadataPartStorage)(nil)
 
 func (mbs *metadataPartStorage) InspectObject(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, versionID *string, inspect func(storage.Object, []storage.IntegrityPart) error) error {
+	snapshotAt := database.SnapshotTime(ctx, mbs.db)
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var object *metadatastore.Object
 		var err error
@@ -28,6 +30,12 @@ func (mbs *metadataPartStorage) InspectObject(ctx context.Context, bucket storag
 		if object.IsDeleteMarker {
 			return storage.ErrNoSuchKey
 		}
+		partIds := make([]partstore.PartId, 0, len(object.Parts))
+		for _, part := range object.Parts {
+			partIds = append(partIds, part.Id)
+		}
+		lease := mbs.readerLeases.begin(ctx, snapshotAt, partIds)
+		defer lease.done()
 		parts := make([]storage.IntegrityPart, 0, len(object.Parts))
 		for _, part := range object.Parts {
 			parts = append(parts, storage.IntegrityPart{
@@ -43,7 +51,11 @@ func (mbs *metadataPartStorage) InspectObject(ctx context.Context, bucket storag
 					if err != nil {
 						return nil, err
 					}
-					return store.GetPart(ctx, tx, part.Id)
+					rc, err := store.GetPart(ctx, tx, part.Id)
+					if err != nil {
+						return nil, err
+					}
+					return lease.wrap(rc), nil
 				},
 			})
 		}

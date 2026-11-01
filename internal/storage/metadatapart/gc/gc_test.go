@@ -24,6 +24,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	partstoresql "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/readerlease"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
@@ -105,7 +106,7 @@ func newGCTestEnv(t *testing.T, db database.Database) *gcTestEnv {
 	require.NoError(t, err)
 	stores, err := partstore.NewNamedPartStores(physicalStore, nil, nil)
 	require.NoError(t, err)
-	collector, err := New(db, metadataStore, stores, registryRepo, dedupRepo)
+	collector, err := New(db, metadataStore, stores, registryRepo, dedupRepo, readerlease.NewMemoryStore(time.Minute))
 	require.NoError(t, err)
 	return &gcTestEnv{
 		db:            db,
@@ -148,7 +149,7 @@ func newPostgresGCTestEnv(t *testing.T) *gcTestEnv {
 
 func TestRunGCLoopCancellationInterruptsActiveCollection(t *testing.T) {
 	db := &contextBlockingDatabase{beginStarted: make(chan struct{})}
-	collector, err := New(db, nil, nil, nil, nil)
+	collector, err := New(db, nil, nil, nil, nil, readerlease.NewMemoryStore(time.Minute))
 	require.NoError(t, err)
 	partCollector := collector.(*partGC)
 	partCollector.writeOperations.Add(1)
@@ -176,7 +177,7 @@ func TestRunGCLoopCancellationInterruptsActiveCollection(t *testing.T) {
 
 func TestRunGCLoopRunsAtIntervalWithoutWrites(t *testing.T) {
 	db := &countingFailDatabase{notify: make(chan struct{}, 2)}
-	collector, err := New(db, nil, nil, nil, nil, time.Hour, 25*time.Millisecond)
+	collector, err := New(db, nil, nil, nil, nil, readerlease.NewMemoryStore(time.Minute), time.Hour, 25*time.Millisecond)
 	require.NoError(t, err)
 
 	var stop atomic.Bool

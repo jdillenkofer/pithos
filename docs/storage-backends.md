@@ -120,6 +120,31 @@ never promoted or listed. Final-named orphan parts are handled by GC after its
 grace window. Namespace durability remains subject to the platform limitations
 above; SFTP has no portable directory sync.
 
+### Long reads and garbage collection
+
+Downloads stream part content without holding a database transaction when
+every part store supports transaction-free reads; otherwise they hold a read
+transaction until the client finished reading. Copies, storage class
+transitions and integrity checks read part content within their own
+transaction. None of these reads has a duration limit. GC keeps a
+dereferenced part for its grace window, which covers every read that ends
+within the lease-free window: half the grace window, at most five minutes. A read still running halfway through that window takes a reader
+lease on the parts it reads, and GC skips leased parts. Each instance renews
+its leases together, so long reads add no per-stream database writes. If a
+lease cannot be acquired or renewed in time, the read fails rather than
+serving content GC may have deleted. A lease whose release fails is no longer
+renewed and expires on its own.
+
+PostgreSQL keeps leases in the database, so every instance sharing it honors
+them; lease expiry uses the database clock. SQLite keeps them in memory,
+which relies on a single process using the database file. All instances must
+use the same GC grace window, and their clocks must agree to well within half
+of it.
+
+The S3 server drops a client that accepts less than 32 KiB of response data
+within two minutes, so a stalled connection cannot hold a lease forever.
+Clients that keep reading at least that fast are not cut off.
+
 ### Persisted token and key cleanup
 
 File-backed string providers require exclusive ownership. Atomic writes preserve

@@ -315,6 +315,9 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 
 	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		// Taken once the transaction holds its connection: waiting for the
+		// connection must not age the snapshot.
+		snapshotAt := database.SnapshotTime(ctx, mbs.db)
 		var object *metadatastore.Object
 		var err error
 		var versionID *string
@@ -347,6 +350,8 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 		// one store.
 		newParts := make([]metadatastore.Part, len(object.Parts))
 		sharedPartIDs := make([]partstore.PartId, 0, len(object.Parts))
+		lease := mbs.readerLeases.begin(ctx, snapshotAt, crossStorePartIds(object.Parts, targetStoreName))
+		defer lease.done()
 		for i, srcPart := range object.Parts {
 			if partStoreNamesEqual(srcPart.StoreName, targetStoreName) {
 				newParts[i] = srcPart
@@ -366,6 +371,7 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 			if err != nil {
 				return err
 			}
+			srcReader = lease.wrap(srcReader)
 			written.add(targetStoreName, *newPartId)
 			err = targetStore.PutPart(ctx, tx, *newPartId, srcReader)
 			srcReader.Close()

@@ -35,7 +35,7 @@ func TestSQLEmptyObjectRepeatedDeleteGC(t *testing.T) {
 			require.NoError(t, err)
 			dedup, err := repositoryfactory.NewPartDedupIndexRepository(st.db)
 			require.NoError(t, err)
-			collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, 100*time.Millisecond, 5*time.Millisecond)
+			collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, st.readerLeases.store, 100*time.Millisecond, 5*time.Millisecond)
 			require.NoError(t, err)
 			rows := func() []partregistry.Entity {
 				t.Helper()

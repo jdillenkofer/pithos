@@ -16,10 +16,12 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/gc"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	partstoreprometheus "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/prometheus"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/readerlease"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
 
@@ -113,10 +115,16 @@ type metadataPartStorage struct {
 	partStores    *partstore.NamedPartStores
 	partGC        gc.PartGarbageCollector
 	gcTaskHandle  *task.TaskHandle
+	partRegistry  partregistry.Repository
+	readerLeases  *readerLeases
 	tracer        trace.Tracer
 }
 
 const defaultGCGraceWindow = 30 * time.Minute
+
+// minGCGraceWindow keeps the reader lease TTL and its renewal interval,
+// which derive from the grace window, positive and practical.
+const minGCGraceWindow = time.Second
 const defaultGCInterval = 30 * time.Minute
 const defaultGCFullPassInterval = 24 * time.Hour
 
@@ -132,8 +140,8 @@ type storageOptions struct {
 // Every instance sharing storage must use the same value.
 func WithGCGraceWindow(window time.Duration) StorageOption {
 	return func(options *storageOptions) error {
-		if window <= 0 {
-			return fmt.Errorf("GC grace window must be positive")
+		if window < minGCGraceWindow {
+			return fmt.Errorf("GC grace window must be at least %s", minGCGraceWindow)
 		}
 		options.gcGraceWindow = window
 		return nil
@@ -217,20 +225,29 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 	if err != nil {
 		return nil, err
 	}
-	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository, partDedupIndexRepository, options.gcGraceWindow, options.gcInterval, options.gcFullPassInterval)
+	leaseFreeWindow := leaseFreeWindowFor(options.gcGraceWindow)
+	readerLeaseStore, err := readerlease.New(db, leaseFreeWindow)
+	if err != nil {
+		return nil, err
+	}
+	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository, partDedupIndexRepository, readerLeaseStore, options.gcGraceWindow, options.gcInterval, options.gcFullPassInterval)
 	if err != nil {
 		return nil, err
 	}
 	db = gc.NewProtectedDatabase(db, partGC)
-	return &metadataPartStorage{
+	mbs := &metadataPartStorage{
 		ValidatedLifecycle: lifecycle,
 		db:                 db,
 		metadataStore:      metadataStore,
 		partStores:         partStores,
 		partGC:             partGC,
 		gcTaskHandle:       nil,
+		partRegistry:       partRegistryRepository,
+		readerLeases:       newReaderLeases(readerLeaseStore, leaseFreeWindow),
 		tracer:             otel.Tracer("internal/storage/metadatapart"),
-	}, nil
+	}
+	mbs.readerLeases.revalidate = mbs.revalidateSnapshot
+	return mbs, nil
 }
 
 func (mbs *metadataPartStorage) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
@@ -253,6 +270,7 @@ func (mbs *metadataPartStorage) Start(ctx context.Context) error {
 	if err := mbs.partStores.Start(ctx); err != nil {
 		return err
 	}
+	mbs.readerLeases.start()
 
 	if !lifecycle.IsMaintenance(ctx) {
 		mbs.gcTaskHandle = task.Start(mbs.partGC.RunGCLoop)
@@ -275,6 +293,7 @@ func (mbs *metadataPartStorage) Stop(ctx context.Context) error {
 			slog.Debug("GCLoop joined without timeout")
 		}
 	}
+	mbs.readerLeases.shutdown(ctx)
 	if err := mbs.metadataStore.Stop(ctx); err != nil {
 		return err
 	}

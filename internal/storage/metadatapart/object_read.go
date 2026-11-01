@@ -219,7 +219,45 @@ func evaluateCopySourceConditions(conditions storage.CopySourceConditions, objec
 }
 
 // createRangeReader creates a reader for a specific byte range of an object.
-func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx database.Tx, object *metadatastore.Object, byteRange storage.ByteRange) (io.ReadCloser, error) {
+// openRangeReaders returns one lazy reader per byte range of object. The
+// readers hold a reader lease on the parts they read, taken for a metadata
+// snapshot no earlier than snapshotAt; the lease ends with ctx.
+func (mbs *metadataPartStorage) openRangeReaders(ctx context.Context, tx database.Tx, object *metadatastore.Object, byteRanges []storage.ByteRange, snapshotAt time.Time) ([]io.ReadCloser, error) {
+	plans := make([][]partRange, len(byteRanges))
+	var partIds []partstore.PartId
+	seen := make(map[partstore.PartId]struct{})
+	for i, byteRange := range byteRanges {
+		parts, err := mbs.planRange(object, byteRange)
+		if err != nil {
+			return nil, err
+		}
+		plans[i] = parts
+		for _, part := range parts {
+			if _, ok := seen[part.id]; !ok {
+				seen[part.id] = struct{}{}
+				partIds = append(partIds, part.id)
+			}
+		}
+	}
+	lease := mbs.readerLeases.begin(ctx, snapshotAt, partIds)
+	defer lease.done()
+	readers := make([]io.ReadCloser, len(plans))
+	for i, parts := range plans {
+		if len(parts) == 0 {
+			readers[i] = io.NopCloser(bytes.NewReader(nil))
+			continue
+		}
+		readers[i] = lease.wrap(&lazyPartSequenceReadCloser{
+			ctx:   ctx,
+			tx:    tx,
+			parts: parts,
+		})
+	}
+	return readers, nil
+}
+
+// planRange returns the part slices that make up byteRange of object.
+func (mbs *metadataPartStorage) planRange(object *metadatastore.Object, byteRange storage.ByteRange) ([]partRange, error) {
 	startByte := byteRange.Start
 	endByte := byteRange.End
 
@@ -278,39 +316,25 @@ func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx databa
 
 		partsSizeUntilNow = partEnd
 	}
-	if len(parts) == 0 {
-		return io.NopCloser(bytes.NewReader(nil)), nil
-	}
+	return parts, nil
+}
 
-	return &lazyPartSequenceReadCloser{
-		ctx:   ctx,
-		tx:    tx,
-		parts: parts,
-	}, nil
+// objectRead is what GetObject looked up: the object and the byte ranges to
+// stream from it. No ranges means an empty body.
+type objectRead struct {
+	object *metadatastore.Object
+	ranges []storage.ByteRange
+	size   int64
 }
 
 func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetObject")
 	defer span.End()
 
-	// When every part store can read without an ambient transaction
-	// (filesystem, sftp — everything except DB-backed part content), the
-	// metadata lookup runs in a short transaction that ends before streaming
-	// starts. Slow clients then no longer pin a pooled database connection for
-	// the lifetime of their download. A single DB-backed part store in the set
-	// keeps the transaction open until every reader is closed (an object's
-	// parts may live in any store), preserving snapshot semantics for the part
-	// content itself.
-	txFreeStreaming := mbs.partStores.Capabilities().Has(partstore.CapabilityTxFreeGetPart)
+	ambientTx, ambient := database.AmbientTx(ctx, mbs.db)
+	snapshotAt := database.SnapshotTime(ctx, mbs.db)
 
-	// The context handed to WithTx carries the (short-lived) transaction;
-	// BeginTx reuses a transaction found in the context, so tx-free readers
-	// must capture the pre-transaction context instead or a later internal
-	// BeginTx (e.g. the outbox lookup) would pick up the finalized one.
-	streamCtx := ctx
-
-	var storageObject storage.Object
-	getObjectInTx := func(ctx context.Context, tx database.Tx) ([]io.ReadCloser, error) {
+	lookupObject := func(ctx context.Context, tx database.Tx) (*objectRead, error) {
 		var object *metadatastore.Object
 		var err error
 		if opts != nil && opts.VersionID != nil {
@@ -366,9 +390,7 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 			if len(ranges) > 0 {
 				return nil, storage.ErrInvalidRange
 			}
-			storageObject = convertObject(*object)
-			storageObject.Size = 0
-			return []io.ReadCloser{io.NopCloser(bytes.NewReader(nil))}, nil
+			return &objectRead{object: object, size: 0}, nil
 		}
 		if len(effectiveRanges) == 0 {
 			if opts != nil && opts.PartNumber != nil {
@@ -401,47 +423,62 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 			}
 		}
 
-		// The range readers are lazy: they don't touch the part store until
-		// first read. With tx-free streaming they carry no transaction at all
-		// and use the pre-transaction context.
-		readerCtx := ctx
-		readerTx := tx
-		if txFreeStreaming {
-			readerCtx = streamCtx
-			readerTx = nil
-		}
-
-		// Create readers for each range
-		var readers []io.ReadCloser
-		for _, byteRange := range effectiveRanges {
-			reader, err := mbs.createRangeReader(readerCtx, readerTx, object, byteRange)
-			if err != nil {
-				for _, r := range readers {
-					r.Close()
-				}
-				return nil, err
-			}
-			readers = append(readers, reader)
-		}
-
-		storageObject = convertObject(*object)
-		storageObject.Size = objectSize
-		return readers, nil
+		return &objectRead{object: object, ranges: effectiveRanges, size: objectSize}, nil
 	}
 
+	// The metadata lookup runs in a short transaction that ends before
+	// streaming starts, so it never pins a snapshot for a whole download.
+	// The object and its parts come from separate statements; one snapshot
+	// keeps them consistent with each other.
+	lookupOptions := &sql.TxOptions{ReadOnly: true}
+	if !ambient && mbs.db.GetDatabaseType() == database.DB_TYPE_POSTGRES {
+		lookupOptions.Isolation = sql.LevelRepeatableRead
+	}
+	var read *objectRead
+	err := database.WithTx(ctx, mbs.db, lookupOptions, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		read, err = lookupObject(ctx, tx)
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// The range readers are lazy: they don't touch the part store until
+	// first read. Reader leases protect the parts they read.
+	openReaders := func(ctx context.Context, tx database.Tx) ([]io.ReadCloser, error) {
+		if len(read.ranges) == 0 {
+			return []io.ReadCloser{io.NopCloser(bytes.NewReader(nil))}, nil
+		}
+		return mbs.openRangeReaders(ctx, tx, read.object, read.ranges, snapshotAt)
+	}
 	var readers []io.ReadCloser
-	var err error
-	if txFreeStreaming {
-		err = database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-			readers, err = getObjectInTx(ctx, tx)
-			return err
-		})
-	} else {
-		readers, err = database.WithTxReadClosers(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, getObjectInTx)
+	switch {
+	case ambient:
+		// Readers inside a caller's transaction keep using it: they may read
+		// parts that transaction wrote and has not committed yet.
+		readers, err = openReaders(ctx, ambientTx)
+	case mbs.partStores.Capabilities().Has(partstore.CapabilityTxFreeGetPart):
+		// Slow clients then pin no pooled database connection for the
+		// lifetime of their download.
+		readers, err = openReaders(ctx, nil)
+	default:
+		// A part store without tx-free reads streams within a transaction
+		// that stays open until every reader is closed (an object's parts may
+		// live in any store). READ COMMITTED keeps it from holding back
+		// PostgreSQL's cleanup for the whole download, whatever the server
+		// default.
+		streamOptions := &sql.TxOptions{ReadOnly: true}
+		if mbs.db.GetDatabaseType() == database.DB_TYPE_POSTGRES {
+			streamOptions.Isolation = sql.LevelReadCommitted
+		}
+		readers, err = database.WithTxReadClosers(ctx, mbs.db, streamOptions, openReaders)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 
+	storageObject := convertObject(*read.object)
+	storageObject.Size = read.size
 	return &storageObject, readers, nil
 }

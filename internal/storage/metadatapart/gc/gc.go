@@ -16,6 +16,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/readerlease"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -30,6 +31,7 @@ var gcMetrics struct {
 	lastSuccess              *prometheus.GaugeVec
 	drift, unknownStoreParts prometheus.Gauge
 	oldestOpenTransaction    prometheus.Gauge
+	leasedParts              prometheus.Gauge
 }
 
 const (
@@ -58,9 +60,10 @@ func registerGCMetrics() {
 		gcMetrics.deleteFailures = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "delete_failures_total", Help: "Number of failed post-commit part deletions by part store, retried by the next sweep"}, []string{"store"})
 		gcMetrics.repairs = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "repairs_total", Help: "Number of part registry and dedup index entries repaired by full passes"}, []string{"kind"})
 		gcMetrics.unknownStoreParts = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "unknown_store_parts", Help: "Number of unreferenced parts the latest sweep skipped because their part store is not configured"})
+		gcMetrics.leasedParts = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "reader_leased_parts", Help: "Number of unreferenced parts the latest sweep skipped because a reader lease still protects them"})
 		gcMetrics.oldestOpenTransaction = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "oldest_open_transaction_age_seconds", Help: "Age of the oldest open database transaction seen by the latest full pass; untracked parts are only tracked once they are older than it plus the grace window"})
 	})
-	pithosmetrics.Register(gcMetrics.runs, gcMetrics.duration, gcMetrics.deleted, gcMetrics.orphans, gcMetrics.errors, gcMetrics.drift, gcMetrics.lastSuccess, gcMetrics.deleteFailures, gcMetrics.repairs, gcMetrics.unknownStoreParts, gcMetrics.oldestOpenTransaction)
+	pithosmetrics.Register(gcMetrics.runs, gcMetrics.duration, gcMetrics.deleted, gcMetrics.orphans, gcMetrics.errors, gcMetrics.drift, gcMetrics.lastSuccess, gcMetrics.deleteFailures, gcMetrics.repairs, gcMetrics.unknownStoreParts, gcMetrics.oldestOpenTransaction, gcMetrics.leasedParts)
 }
 
 type PartGarbageCollector interface {
@@ -73,6 +76,7 @@ type partGC struct {
 	partRegistryRepository   partregistry.Repository
 	partDedupIndexRepository partdedupindex.Repository
 	partStores               *partstore.NamedPartStores
+	readerLeases             readerlease.Store
 	writeOperations          atomic.Int64
 	tracer                   trace.Tracer
 	graceWindow              time.Duration
@@ -80,7 +84,7 @@ type partGC struct {
 	fullPassInterval         time.Duration
 }
 
-func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository, durations ...time.Duration) (PartGarbageCollector, error) {
+func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository, readerLeases readerlease.Store, durations ...time.Duration) (PartGarbageCollector, error) {
 	registerGCMetrics()
 	graceWindow := 30 * time.Minute
 	if len(durations) > 0 {
@@ -110,6 +114,7 @@ func New(db database.Database, metadataStore metadatastore.MetadataStore, partSt
 		partRegistryRepository:   partRegistryRepository,
 		partDedupIndexRepository: partDedupIndexRepository,
 		partStores:               partStores,
+		readerLeases:             readerLeases,
 		tracer:                   otel.Tracer("internal/storage/metadatapart/gc"),
 		graceWindow:              graceWindow,
 		collectionInterval:       collectionInterval,
@@ -132,10 +137,7 @@ func (db *protectedDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (
 	readOnly := opts != nil && opts.ReadOnly
 	if tx, ok := database.TxControllerFromContext(ctx); ok {
 		if tx.DBHandle() == db || tx.DBHandle() == db.inner {
-			if !readOnly && tx.ReadOnly() {
-				return nil, database.ErrWriteInReadOnlyTransaction
-			}
-			return tx.Child(), nil
+			return tx.Nested(opts)
 		}
 	}
 
@@ -148,7 +150,7 @@ func (db *protectedDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (
 		return nil, err
 	}
 
-	protectedTx := database.NewTxController(tx.SqlTx(), db, readOnly)
+	protectedTx := database.NewTxController(tx.SqlTx(), db, readOnly).WithStatementSnapshots(tx.StatementSnapshots()).WithStartedAt(tx.StartedAt()).WithIsolation(tx.Isolation())
 	return protectedTx, nil
 }
 
@@ -459,8 +461,14 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.runSweep")
 	defer span.End()
 	cutoff := time.Now().UTC().Add(-partGC.graceWindow)
+	// Expired leases protect nothing, so failing to delete them only delays
+	// their cleanup.
+	if _, err := partGC.readerLeases.DeleteExpired(ctx); err != nil {
+		slog.Warn("deleting expired reader leases failed; retrying in next GC sweep", "error", err)
+	}
 	numDeletedParts := 0
 	numUnknownStoreParts := 0
+	numLeasedParts := 0
 	var after *partstore.PartId
 	for {
 		var candidates []partregistry.Unreferenced
@@ -475,16 +483,31 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 			break
 		}
 		after = &candidates[len(candidates)-1].PartId
+		candidateIds := make([]partstore.PartId, len(candidates))
+		for i, candidate := range candidates {
+			candidateIds[i] = candidate.PartId
+		}
 		type externalDelete struct {
 			id        partstore.PartId
 			store     partstore.PartStore
 			storeName string
 		}
 		var external []externalDelete
-		var batchDeleted, batchUnknownStore int
+		var batchDeleted, batchUnknownStore, batchLeased int
 		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 			external, batchDeleted, batchUnknownStore = nil, 0, 0
+			// Read after taking cutoff: a reader of a part unreferenced
+			// before cutoff committed its lease before then, or stopped
+			// reading.
+			leased, err := partGC.readerLeases.Leased(ctx, tx, candidateIds)
+			if err != nil {
+				return err
+			}
+			batchLeased = len(leased)
 			for _, candidate := range candidates {
+				if _, ok := leased[candidate.PartId]; ok {
+					continue
+				}
 				store, err := partGC.partStores.ByName(candidate.StoreName)
 				if err != nil {
 					slog.Warn("skipping unreferenced part of unknown part store", "part_id", candidate.PartId.String(), "error", err)
@@ -522,6 +545,7 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 		gcMetrics.deleted.Add(float64(batchDeleted))
 		numDeletedParts += batchDeleted
 		numUnknownStoreParts += batchUnknownStore
+		numLeasedParts += batchLeased
 		// External deletes run after the condemnation committed. A failed
 		// delete keeps the condemned row, so the next sweep retries it.
 		var deleted []partstore.PartId
@@ -556,6 +580,7 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 	}
 	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d parts", numDeletedParts))
 	gcMetrics.unknownStoreParts.Set(float64(numUnknownStoreParts))
+	gcMetrics.leasedParts.Set(float64(numLeasedParts))
 	return nil
 }
 

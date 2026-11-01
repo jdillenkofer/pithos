@@ -301,6 +301,11 @@ func newTestStorageWithColdStore(t *testing.T) (*metadataPartStorage, func()) {
 
 func newPostgresTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	t.Helper()
+	return newPostgresTestStorageWithPool(t, nil)
+}
+
+func newPostgresTestStorageWithPool(t *testing.T, pool *pgxdatabase.ConnectionPoolConfiguration) (*metadataPartStorage, func()) {
+	t.Helper()
 	// Windows runners' Docker has no bridge network for Linux containers;
 	// the provider health check does not detect this.
 	testutils.SkipOnWindowsInGitHubActions(t)
@@ -313,7 +318,7 @@ func newPostgresTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	require.NoError(t, err)
 	dbURL, err := container.ConnectionString(ctx)
 	require.NoError(t, err)
-	db, err := pgxdatabase.OpenDatabase(dbURL, nil)
+	db, err := pgxdatabase.OpenDatabase(dbURL, pool)
 	require.NoError(t, err)
 
 	partContentRepository, err := repositoryFactory.NewPartContentRepository(db)
@@ -583,6 +588,8 @@ func TestIdenticalPutObjectsDeduplicateContent(t *testing.T) {
 	ctx := context.Background()
 	st, cleanup := newTestStorage(t)
 	defer cleanup()
+	// The duplicate is never referenced, so any sweep may reclaim it at once.
+	stopStorageGC(t, st)
 
 	bucket := storage.MustNewBucketName("bucket")
 	firstKey := storage.MustNewObjectKey("first")
