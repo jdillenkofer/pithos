@@ -168,6 +168,17 @@ combinations return `InvalidRequest` (HTTP 400). Without an explicit algorithm,
 Pithos retains its legacy `FULL_OBJECT` default and does not infer an algorithm
 for legacy uploads. S3-backed storage forwards upstream checksum metadata.
 
+When an upload was initiated with an additional checksum algorithm,
+`CompleteMultipartUpload` requires the selected manifest's part numbers to start
+at 1 and be consecutive (`1, 2, ..., N`), for both `COMPOSITE` and `FULL_OBJECT`.
+A gap or a first part number greater than 1 returns `InvalidPartOrder` (HTTP 400),
+matching the [S3 API contract](https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompletedPart.html).
+This tightens earlier Pithos behavior, which accepted gaps for checksum uploads.
+Without an additional checksum algorithm, gaps and a first part number greater
+than 1 remain allowed. All manifests must list parts in strictly ascending order.
+Only selected parts form the object; unlisted uploaded parts do not affect this
+validation. Parts may still be uploaded out of order or replaced before completion.
+
 ### Lifecycle abort headers
 
 `ListParts` returns `x-amz-abort-date` and, when the matching rule has an ID,
