@@ -26,7 +26,7 @@ func useShortReaderLeases(t *testing.T, st *metadataPartStorage, graceWindow tim
 	window := leaseFreeWindowFor(graceWindow)
 	store, err := readerlease.New(st.db, window)
 	require.NoError(t, err)
-	st.readerLeases.shutdown(context.Background())
+	st.readerLeases.shutdown()
 	st.readerLeases = newReaderLeases(store, window)
 	st.readerLeases.start()
 	registry, err := repositoryfactory.NewPartRegistryRepository(st.db)

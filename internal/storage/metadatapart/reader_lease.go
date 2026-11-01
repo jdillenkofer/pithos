@@ -99,41 +99,21 @@ func (rl *readerLeases) start() {
 	go rl.renewLoop()
 }
 
-// shutdown ends every lease and waits until nothing uses the store anymore.
-// Readers still open fail once shutdown begins. The leases are released in
-// one statement bounded by ctx and readerLeaseReleaseTimeout; a lease whose
-// release fails expires on its own.
-func (rl *readerLeases) shutdown(ctx context.Context) {
+// shutdown stops renewing leases and waits until nothing uses the store
+// anymore. Readers still open fail once shutdown begins; their leases are
+// not released but expire on their own.
+func (rl *readerLeases) shutdown() {
 	rl.mu.Lock()
 	if rl.stopped {
 		rl.mu.Unlock()
 		return
 	}
 	rl.stopped = true
-	leases := make([]*readerLease, 0, len(rl.acquired))
-	for lease := range rl.acquired {
-		leases = append(leases, lease)
-	}
 	rl.mu.Unlock()
 	rl.cancel()
 	if rl.stop != nil {
 		close(rl.stop)
 		<-rl.done
-	}
-	// A lease ended concurrently may have skipped its release; releasing
-	// twice is harmless.
-	leaseIds := make([]string, 0, len(leases))
-	for _, lease := range leases {
-		lease.finish(errReaderLeasesStopped)
-		rl.forget(lease)
-		leaseIds = append(leaseIds, lease.id)
-	}
-	if len(leaseIds) > 0 {
-		releaseCtx, cancel := context.WithTimeout(database.ContextWithoutTx(ctx), readerLeaseReleaseTimeout)
-		if err := rl.store.Release(releaseCtx, leaseIds); err != nil {
-			slog.Warn("Releasing reader leases failed; they expire on their own", "leases", len(leaseIds), "error", err)
-		}
-		cancel()
 	}
 	rl.tasks.Wait()
 }
@@ -218,10 +198,8 @@ func (rl *readerLeases) begin(ctx context.Context, snapshotAt time.Time, partIds
 	// The lease ends with the request even if a reader is never closed, so
 	// the instance does not renew it forever. AfterFunc runs end at once for
 	// a canceled ctx; holding mu makes it wait until both fields are set.
-	// Shutdown ends it too, including one still within the lease-free window.
 	l.mu.Lock()
 	l.stopOnCancel = context.AfterFunc(ctx, func() { l.end(ctx.Err()) })
-	l.stopOnShutdown = context.AfterFunc(rl.ctx, func() { l.end(errReaderLeasesStopped) })
 	l.timer = time.AfterFunc(time.Until(snapshotAt.Add(rl.window/2)), func() {
 		if !rl.track() {
 			l.fail(errReaderLeasesStopped)
@@ -246,21 +224,20 @@ type readerLease struct {
 	// failure is set once reads are no longer protected; it never clears.
 	failure atomic.Pointer[error]
 
-	mu             sync.Mutex
-	refs           int
-	timer          *time.Timer
-	stopOnCancel   func() bool
-	stopOnShutdown func() bool
-	acquired       bool
-	ended          bool
+	mu           sync.Mutex
+	refs         int
+	timer        *time.Timer
+	stopOnCancel func() bool
+	acquired     bool
+	ended        bool
 }
 
 func (l *readerLease) err() error {
 	if err := l.failure.Load(); err != nil {
 		return *err
 	}
-	// The part stores stop after shutdown, possibly before stopOnShutdown
-	// ran.
+	// The part stores stop right after shutdown, which also stops renewing
+	// the lease.
 	if l.leases.ctx.Err() != nil {
 		return errReaderLeasesStopped
 	}
@@ -333,17 +310,14 @@ func (l *readerLease) acquire(deadline time.Time) {
 	ended := l.ended
 	if !ended {
 		l.leases.mu.Lock()
-		// shutdown ends only the leases it finds here.
-		if l.leases.stopped {
-			ended = true
-		} else {
+		// After shutdown began, nothing renews the lease; it expires.
+		if !l.leases.stopped {
 			l.leases.acquired[l] = struct{}{}
 		}
 		l.leases.mu.Unlock()
 	}
 	l.mu.Unlock()
 	if ended {
-		l.fail(errReaderLeasesStopped)
 		l.release()
 	}
 }
@@ -373,7 +347,7 @@ func (l *readerLease) end(err error) {
 		return
 	}
 	l.leases.forget(l)
-	// After shutdown began, shutdown releases the lease.
+	// After shutdown began, the lease expires on its own.
 	if !l.leases.track() {
 		return
 	}
@@ -398,9 +372,6 @@ func (l *readerLease) finish(err error) bool {
 	}
 	if l.stopOnCancel != nil {
 		l.stopOnCancel()
-	}
-	if l.stopOnShutdown != nil {
-		l.stopOnShutdown()
 	}
 	acquired := l.acquired
 	l.mu.Unlock()

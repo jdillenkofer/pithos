@@ -80,7 +80,7 @@ func newTestReaderLeases(t *testing.T) (*readerLeases, *faultyLeaseStore) {
 	store := &faultyLeaseStore{Store: readerlease.NewMemoryStore(testLeaseFreeWindow), renewStarted: make(chan struct{}, 1), renewEnded: make(chan error, 1)}
 	leases := newReaderLeases(store, testLeaseFreeWindow)
 	leases.start()
-	t.Cleanup(func() { leases.shutdown(context.Background()) })
+	t.Cleanup(func() { leases.shutdown() })
 	return leases, store
 }
 
@@ -224,22 +224,20 @@ func TestLateReaderLeaseAcquisitionDoesNotReviveProtection(t *testing.T) {
 	require.False(t, isLeased(t, store, partId))
 }
 
-func TestShutdownReleasesReaderLeases(t *testing.T) {
+func TestShutdownLetsReaderLeasesExpire(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	leases, store := newTestReaderLeases(t)
 	reader, partId := newLeasedReader(t, leases, context.Background(), time.Now())
-	defer reader.Close()
-	other, otherPartId := newLeasedReader(t, leases, context.Background(), time.Now())
-	defer other.Close()
-	require.Eventually(t, func() bool {
-		return isLeased(t, store, partId) && isLeased(t, store, otherPartId)
-	}, testLeaseFreeWindow, 10*time.Millisecond)
-	// Both leases end in one release.
-	leases.shutdown(context.Background())
-	require.False(t, isLeased(t, store, partId))
-	require.Equal(t, int64(1), store.releases.Load())
+	require.Eventually(t, func() bool { return isLeased(t, store, partId) }, testLeaseFreeWindow, 10*time.Millisecond)
+	leases.shutdown()
 	_, err := reader.Read(make([]byte, 1))
 	require.ErrorIs(t, err, errReaderLeasesStopped)
+	// Nothing releases or renews the lease anymore, even once the reader
+	// is closed.
+	require.NoError(t, reader.Close())
+	require.True(t, isLeased(t, store, partId))
+	require.Eventually(t, func() bool { return !isLeased(t, store, partId) }, 2*testLeaseFreeWindow, 10*time.Millisecond)
+	require.Zero(t, store.releases.Load())
 }
 
 func TestShutdownCancelsRenewalInFlight(t *testing.T) {
@@ -255,7 +253,7 @@ func TestShutdownCancelsRenewalInFlight(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("no renewal started")
 	}
-	leases.shutdown(context.Background())
+	leases.shutdown()
 	require.ErrorIs(t, <-store.renewEnded, context.Canceled)
 }
 
@@ -268,7 +266,7 @@ func TestShutdownStopsPendingReaderLeaseAcquisitions(t *testing.T) {
 	require.Eventually(t, func() bool { return store.acquires.Load() > 0 }, testLeaseFreeWindow, 10*time.Millisecond)
 	pending, _ := newLeasedReader(t, leases, context.Background(), time.Now())
 	defer pending.Close()
-	leases.shutdown(context.Background())
+	leases.shutdown()
 	acquires := store.acquires.Load()
 	time.Sleep(testLeaseFreeWindow)
 	require.Equal(t, acquires, store.acquires.Load())
@@ -283,7 +281,7 @@ func TestShutdownStopsReadersWithinLeaseFreeWindow(t *testing.T) {
 	leases, store := newTestReaderLeases(t)
 	reader, _ := newLeasedReader(t, leases, context.Background(), time.Now())
 	defer reader.Close()
-	leases.shutdown(context.Background())
+	leases.shutdown()
 	// The part stores stop right after shutdown, so the reader must not wait
 	// for its acquisition timer to learn about it.
 	_, err := reader.Read(make([]byte, 1))
