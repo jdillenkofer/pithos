@@ -292,7 +292,7 @@ func (mbs *metadataPartStorage) Stop(ctx context.Context) error {
 			slog.Debug("GCLoop joined without timeout")
 		}
 	}
-	mbs.readerLeases.shutdown(ctx)
+	mbs.readerLeases.shutdown()
 	if err := mbs.metadataStore.Stop(ctx); err != nil {
 		return err
 	}
