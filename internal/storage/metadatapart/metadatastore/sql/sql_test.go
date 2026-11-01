@@ -95,7 +95,7 @@ func TestSelectCompleteMultipartUploadParts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			selectedParts, err := selectCompleteMultipartUploadParts(tt.declaredParts, storedParts, nil)
+			selectedParts, err := selectCompleteMultipartUploadParts(tt.declaredParts, storedParts, nil, false)
 			if tt.wantErr == nil {
 				assert.NoError(t, err)
 				numbers := make([]int, len(selectedParts))
@@ -123,7 +123,7 @@ func TestSelectCompleteMultipartUploadPartsRequiresChecksumOfUploadAlgorithm(t *
 	_, err := selectCompleteMultipartUploadParts([]metadatastore.CompleteMultipartUploadPart{
 		{PartNumber: 1, ETag: "etag-1", ChecksumSHA256: &checksumSHA256},
 		{PartNumber: 2, ETag: "etag-2"},
-	}, storedParts, &algorithm)
+	}, storedParts, &algorithm, true)
 	var missingErr *metadatastore.MissingPartChecksumError
 	require.ErrorAs(t, err, &missingErr)
 	assert.Equal(t, int32(2), missingErr.PartNumber)
@@ -132,9 +132,68 @@ func TestSelectCompleteMultipartUploadPartsRequiresChecksumOfUploadAlgorithm(t *
 	selectedParts, err := selectCompleteMultipartUploadParts([]metadatastore.CompleteMultipartUploadPart{
 		{PartNumber: 1, ETag: "etag-1", ChecksumSHA256: &checksumSHA256},
 		{PartNumber: 2, ETag: "etag-2", ChecksumSHA256: &checksumSHA256},
-	}, storedParts, &algorithm)
+	}, storedParts, &algorithm, true)
 	require.NoError(t, err)
 	assert.Len(t, selectedParts, 2)
+}
+
+func TestSelectCompleteMultipartUploadPartsNumbering(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	checksum := "AAAAAA=="
+	storedParts := []part.Entity{
+		{SequenceNumber: 1, ETag: "etag-1", ChecksumCRC32: &checksum},
+		{SequenceNumber: 2, ETag: "etag-2", ChecksumCRC32: &checksum},
+		{SequenceNumber: 3, ETag: "etag-3", ChecksumCRC32: &checksum},
+		{SequenceNumber: 5, ETag: "etag-5", ChecksumCRC32: &checksum},
+	}
+
+	for _, mode := range []string{"no additional checksum", "COMPOSITE", "FULL_OBJECT"} {
+		t.Run(mode, func(t *testing.T) {
+			var requiredAlgorithm *string
+			if mode == "COMPOSITE" {
+				algorithm := "CRC32"
+				requiredAlgorithm = &algorithm
+			}
+			requireConsecutive := mode != "no additional checksum"
+			for _, tt := range []struct {
+				name    string
+				numbers []int32
+				invalid bool
+			}{
+				{name: "consecutive selected subset", numbers: []int32{1, 2}},
+				{name: "single first part", numbers: []int32{1}},
+				{name: "gaps", numbers: []int32{1, 3, 5}, invalid: requireConsecutive},
+				{name: "starts above one", numbers: []int32{2, 3}, invalid: requireConsecutive},
+				{name: "single later part", numbers: []int32{3}, invalid: requireConsecutive},
+				{name: "descending", numbers: []int32{2, 1}, invalid: true},
+				{name: "duplicate", numbers: []int32{1, 1}, invalid: true},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					manifest := make([]metadatastore.CompleteMultipartUploadPart, len(tt.numbers))
+					for i, number := range tt.numbers {
+						manifest[i] = metadatastore.CompleteMultipartUploadPart{
+							PartNumber: number,
+							ETag:       fmt.Sprintf("etag-%d", number),
+						}
+						if requiredAlgorithm != nil {
+							manifest[i].ChecksumCRC32 = &checksum
+						}
+					}
+					selected, err := selectCompleteMultipartUploadParts(manifest, storedParts, requiredAlgorithm, requireConsecutive)
+					if tt.invalid {
+						require.ErrorIs(t, err, metadatastore.ErrInvalidPartOrder)
+						return
+					}
+					require.NoError(t, err)
+					require.Len(t, selected, len(tt.numbers))
+					for i, number := range tt.numbers {
+						assert.Equal(t, int(number), selected[i].SequenceNumber)
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestSqlMetadataStore(t *testing.T) {

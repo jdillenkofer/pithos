@@ -186,7 +186,9 @@ func declaredPartChecksumMatches(declared *string, stored *string) bool {
 // the declared parts in manifest order. Uploaded parts missing from the
 // manifest are not part of the object, as in S3. When requiredChecksumAlgorithm
 // is set, every declared part must carry a checksum of that algorithm.
-func selectCompleteMultipartUploadParts(declaredParts []metadatastore.CompleteMultipartUploadPart, storedParts []part.Entity, requiredChecksumAlgorithm *string) ([]part.Entity, error) {
+// requireConsecutivePartNumbers enforces part numbers 1..N, as S3 does for
+// uploads with an additional checksum algorithm.
+func selectCompleteMultipartUploadParts(declaredParts []metadatastore.CompleteMultipartUploadPart, storedParts []part.Entity, requiredChecksumAlgorithm *string, requireConsecutivePartNumbers bool) ([]part.Entity, error) {
 	if len(declaredParts) == 0 {
 		return nil, metadatastore.ErrMalformedXML
 	}
@@ -198,8 +200,8 @@ func selectCompleteMultipartUploadParts(declaredParts []metadatastore.CompleteMu
 
 	selectedParts := make([]part.Entity, 0, len(declaredParts))
 	previousPartNumber := int32(0)
-	for _, declaredPart := range declaredParts {
-		if declaredPart.PartNumber <= previousPartNumber {
+	for i, declaredPart := range declaredParts {
+		if declaredPart.PartNumber <= previousPartNumber || (requireConsecutivePartNumbers && declaredPart.PartNumber != int32(i+1)) {
 			return nil, metadatastore.ErrInvalidPartOrder
 		}
 		previousPartNumber = declaredPart.PartNumber
@@ -295,7 +297,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 
 	selectedParts := partEntities
 	if opts != nil && opts.Parts != nil {
-		selectedParts, err = selectCompleteMultipartUploadParts(opts.Parts, partEntities, requiredChecksumAlgorithm)
+		selectedParts, err = selectCompleteMultipartUploadParts(opts.Parts, partEntities, requiredChecksumAlgorithm, objectEntity.ChecksumAlgorithm != nil)
 		if err != nil {
 			return nil, err
 		}
