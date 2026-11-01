@@ -174,19 +174,6 @@ func TestReadsFromTooOldSnapshotFail(t *testing.T) {
 	require.Zero(t, store.acquires.Load())
 }
 
-func TestReadsFromRevalidatedOldSnapshotSucceed(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-	leases, store := newTestReaderLeases(t)
-	leases.revalidate = func(ctx context.Context, partIds []partstore.PartId) (time.Time, error) {
-		return time.Now(), nil
-	}
-	reader, partId := newLeasedReader(t, leases, context.Background(), time.Now().Add(-testLeaseFreeWindow))
-	defer reader.Close()
-	require.Eventually(t, func() bool { return isLeased(t, store, partId) }, testLeaseFreeWindow, 10*time.Millisecond)
-	_, err := io.ReadAll(reader)
-	require.NoError(t, err)
-}
-
 func TestReaderLeaseWhoseReleaseFailedIsNotRenewed(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	leases, store := newTestReaderLeases(t)

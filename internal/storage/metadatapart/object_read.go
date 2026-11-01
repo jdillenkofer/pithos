@@ -465,14 +465,9 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	default:
 		// A part store without tx-free reads streams within a transaction
 		// that stays open until every reader is closed (an object's parts may
-		// live in any store). READ COMMITTED keeps it from holding back
-		// PostgreSQL's cleanup for the whole download, whatever the server
-		// default.
-		streamOptions := &sql.TxOptions{ReadOnly: true}
-		if mbs.db.GetDatabaseType() == database.DB_TYPE_POSTGRES {
-			streamOptions.Isolation = sql.LevelReadCommitted
-		}
-		readers, err = database.WithTxReadClosers(ctx, mbs.db, streamOptions, openReaders)
+		// live in any store). READ COMMITTED, the PostgreSQL default here,
+		// keeps it from holding back cleanup for the whole download.
+		readers, err = database.WithTxReadClosers(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, openReaders)
 	}
 	if err != nil {
 		return nil, nil, err

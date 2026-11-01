@@ -121,7 +121,7 @@ func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*d
 		if err != nil {
 			return nil, err
 		}
-		return database.NewTxController(tx, sdb, readOnly).WithIsolation(sql.LevelSerializable), nil
+		return database.NewTxController(tx, sdb, readOnly), nil
 	}
 	tx, err := sdb.writeableDb.BeginTx(ctx, opts)
 	if err != nil {
@@ -129,7 +129,7 @@ func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*d
 	}
 	// Writers begin immediately and hold the only write lock, so they always
 	// read the latest committed state.
-	return database.NewTxController(tx, sdb, readOnly).WithStatementSnapshots(true).WithIsolation(sql.LevelSerializable), nil
+	return database.NewTxController(tx, sdb, readOnly).WithStatementSnapshots(true), nil
 }
 
 func (sdb *sqliteDatabase) PingContext(ctx context.Context) error {

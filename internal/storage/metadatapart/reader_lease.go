@@ -2,7 +2,6 @@ package metadatapart
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -48,11 +47,6 @@ var (
 
 const readerLeaseReleaseTimeout = 10 * time.Second
 
-// maxRevalidationTimeout bounds the fresh read that revalidates a snapshot.
-// It needs a second connection while the caller's transaction holds one, so
-// an exhausted pool would otherwise block the caller for good.
-const maxRevalidationTimeout = 10 * time.Second
-
 // maxLeaseFreeWindow keeps acquisition and renewal frequent enough to
 // survive a short database outage with large grace windows.
 const maxLeaseFreeWindow = 5 * time.Minute
@@ -68,10 +62,6 @@ type readerLeases struct {
 	// database.
 	margin time.Duration
 	epoch  time.Time
-	// revalidate, if set, renews a snapshot too old to protect its parts:
-	// it returns a time no later than a fresh read that found every part
-	// still referenced, or an error.
-	revalidate func(ctx context.Context, partIds []partstore.PartId) (time.Time, error)
 	// ctx is canceled on shutdown to abort pending acquisitions.
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -218,28 +208,11 @@ func (rl *readerLeases) begin(ctx context.Context, snapshotAt time.Time, partIds
 	}
 	deadline := snapshotAt.Add(rl.window - rl.margin)
 	if !time.Now().Before(deadline) {
-		// A long transaction that reads one snapshot may still name parts
-		// that are referenced now; reads of those are as safe as from a
-		// fresh snapshot.
-		err := errSnapshotTooOld
-		if rl.revalidate != nil {
-			revalidateCtx, cancel := context.WithTimeout(ctx, min(maxRevalidationTimeout, rl.window/2))
-			renewedAt, revalidateErr := rl.revalidate(revalidateCtx, partIds)
-			cancel()
-			switch {
-			case revalidateErr == nil:
-				err = nil
-				snapshotAt = renewedAt
-				deadline = snapshotAt.Add(rl.window - rl.margin)
-			case !errors.Is(revalidateErr, errSnapshotTooOld):
-				err = fmt.Errorf("%w: revalidating: %w", errSnapshotTooOld, revalidateErr)
-			}
-		}
-		if err != nil {
-			l.protectedUntil.Store(rl.monotonic(deadline))
-			l.fail(err)
-			return l
-		}
+		// Only a transaction that reads one snapshot can be this old; GC
+		// may already have deleted parts it still names.
+		l.protectedUntil.Store(rl.monotonic(deadline))
+		l.fail(errSnapshotTooOld)
+		return l
 	}
 	l.protectedUntil.Store(rl.monotonic(deadline))
 	// The lease ends with the request even if a reader is never closed, so
@@ -484,26 +457,6 @@ func (r *leasedReadCloser) Close() error {
 	err := r.inner.Close()
 	r.closeOnce.Do(r.lease.done)
 	return err
-}
-
-// revalidateSnapshot returns a time no later than a fresh read that found
-// every part in partIds referenced. A referenced part has not started its
-// retention, so that time protects reads like a snapshot taken then.
-func (mbs *metadataPartStorage) revalidateSnapshot(ctx context.Context, partIds []partstore.PartId) (time.Time, error) {
-	renewedAt := time.Now()
-	err := database.WithTx(database.ContextWithoutTx(ctx), mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-		for _, partId := range partIds {
-			referenced, err := mbs.partRegistry.IsReferenced(ctx, tx.SqlTx(), partId)
-			if err != nil {
-				return err
-			}
-			if !referenced {
-				return errSnapshotTooOld
-			}
-		}
-		return nil
-	})
-	return renewedAt, err
 }
 
 // crossStorePartIds returns the ids of parts outside storeName, which a copy

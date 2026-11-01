@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
-	pgxdatabase "github.com/jdillenkofer/pithos/internal/storage/database/pgx"
 	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/gc"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/readerlease"
@@ -29,7 +28,6 @@ func useShortReaderLeases(t *testing.T, st *metadataPartStorage, graceWindow tim
 	require.NoError(t, err)
 	st.readerLeases.shutdown(context.Background())
 	st.readerLeases = newReaderLeases(store, window)
-	st.readerLeases.revalidate = st.revalidateSnapshot
 	st.readerLeases.start()
 	registry, err := repositoryfactory.NewPartRegistryRepository(st.db)
 	require.NoError(t, err)
@@ -93,10 +91,9 @@ func TestReaderLeaseProtectsDownloadsOfDeletedObjectsFromGC(t *testing.T) {
 	}
 }
 
-// A transaction that reads one snapshot may stream parts it found long ago
-// as long as metadata still references them, but not parts dereferenced
-// since.
-func TestOldSnapshotReadsPartsThatAreStillReferenced(t *testing.T) {
+// A transaction that reads one snapshot cannot stream parts once it is
+// older than the lease-free window, even parts metadata still references.
+func TestOldSnapshotCannotReadParts(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
@@ -115,32 +112,18 @@ func TestOldSnapshotReadsPartsThatAreStillReferenced(t *testing.T) {
 			ctx := context.Background()
 
 			bucket := storage.MustNewBucketName("bucket")
-			kept := storage.MustNewObjectKey("kept")
-			deleted := storage.MustNewObjectKey("deleted")
+			key := storage.MustNewObjectKey("key")
 			require.NoError(t, st.CreateBucket(ctx, bucket))
-			// Distinct content keeps dedup from sharing a part between them.
-			content := strings.Repeat("pithos", 1024)
-			for _, key := range []storage.ObjectKey{kept, deleted} {
-				_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte(content+key.String())), nil, nil)
-				require.NoError(t, err)
-			}
+			_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("pithos")), nil, nil)
+			require.NoError(t, err)
 
-			err := st.WithTransaction(ctx, txOptions, func(txCtx context.Context, txStorage storage.Storage) error {
+			err = st.WithTransaction(ctx, txOptions, func(txCtx context.Context, txStorage storage.Storage) error {
 				// The first statement takes the snapshot.
-				_, err := txStorage.HeadObject(txCtx, bucket, kept, nil)
-				require.NoError(t, err)
-				_, err = st.DeleteObject(ctx, bucket, deleted, nil)
+				_, err := txStorage.HeadObject(txCtx, bucket, key, nil)
 				require.NoError(t, err)
 				time.Sleep(leaseFreeWindowFor(graceWindow))
 
-				_, readers, err := txStorage.GetObject(txCtx, bucket, kept, nil, nil)
-				require.NoError(t, err)
-				body, err := io.ReadAll(readers[0])
-				require.NoError(t, err)
-				require.Equal(t, content+kept.String(), string(body))
-				require.NoError(t, readers[0].Close())
-
-				_, readers, err = txStorage.GetObject(txCtx, bucket, deleted, nil, nil)
+				_, readers, err := txStorage.GetObject(txCtx, bucket, key, nil, nil)
 				require.NoError(t, err)
 				_, err = io.ReadAll(readers[0])
 				require.ErrorIs(t, err, errSnapshotTooOld)
@@ -151,44 +134,43 @@ func TestOldSnapshotReadsPartsThatAreStillReferenced(t *testing.T) {
 	}
 }
 
-// Revalidation needs a second connection while the old transaction holds
-// one. With the pool exhausted it must give up instead of blocking the
-// caller, which cannot release its connection before GetObject returns.
-func TestOldSnapshotRevalidationGivesUpOnExhaustedPool(t *testing.T) {
+// Statements of a writable transaction read the latest committed state, so
+// however long it has been open, it reads parts it wrote itself.
+func TestOldWritableTransactionReadsItsOwnWrites(t *testing.T) {
 	testutils.SkipIfIntegration(t)
-	st, cleanup := newPostgresTestStorageWithPool(t, &pgxdatabase.ConnectionPoolConfiguration{MaxOpenConns: 1, MaxIdleConns: 1})
-	defer cleanup()
-	graceWindow := 600 * time.Millisecond
-	useShortReaderLeases(t, st, graceWindow)
-	ctx := context.Background()
-
-	bucket := storage.MustNewBucketName("bucket")
-	key := storage.MustNewObjectKey("key")
-	require.NoError(t, st.CreateBucket(ctx, bucket))
-	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("pithos")), nil, nil)
-	require.NoError(t, err)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- st.WithTransaction(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead}, func(txCtx context.Context, txStorage storage.Storage) error {
-			if _, err := txStorage.HeadObject(txCtx, bucket, key, nil); err != nil {
-				return err
+	for _, backend := range []string{"sqlite", "postgres"} {
+		t.Run(backend, func(t *testing.T) {
+			var st *metadataPartStorage
+			var cleanup func()
+			if backend == "postgres" {
+				st, cleanup = newPostgresTestStorage(t)
+			} else {
+				st, cleanup = newTestStorage(t)
 			}
-			time.Sleep(leaseFreeWindowFor(graceWindow))
-			_, readers, err := txStorage.GetObject(txCtx, bucket, key, nil, nil)
-			if err != nil {
-				return err
-			}
-			defer readers[0].Close()
-			_, err = io.ReadAll(readers[0])
-			return err
+			defer cleanup()
+			graceWindow := 600 * time.Millisecond
+			useShortReaderLeases(t, st, graceWindow)
+			ctx := context.Background()
+
+			bucket := storage.MustNewBucketName("bucket")
+			key := storage.MustNewObjectKey("key")
+			require.NoError(t, st.CreateBucket(ctx, bucket))
+
+			err := st.WithTransaction(ctx, nil, func(txCtx context.Context, txStorage storage.Storage) error {
+				_, err := txStorage.HeadBucket(txCtx, bucket)
+				require.NoError(t, err)
+				time.Sleep(leaseFreeWindowFor(graceWindow))
+
+				_, err = txStorage.PutObject(txCtx, bucket, key, nil, bytes.NewReader([]byte("pithos")), nil, nil)
+				require.NoError(t, err)
+				_, readers, err := txStorage.GetObject(txCtx, bucket, key, nil, nil)
+				require.NoError(t, err)
+				body, err := io.ReadAll(readers[0])
+				require.NoError(t, err)
+				require.Equal(t, "pithos", string(body))
+				return readers[0].Close()
+			})
+			require.NoError(t, err)
 		})
-	}()
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, errSnapshotTooOld)
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-	case <-time.After(10 * time.Second):
-		t.Fatal("revalidation blocked on the exhausted connection pool")
 	}
 }
