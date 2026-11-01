@@ -508,6 +508,7 @@ var ErrBucketAlreadyExists error = metadatastore.ErrBucketAlreadyExists
 var ErrBucketNotEmpty error = metadatastore.ErrBucketNotEmpty
 var ErrNoSuchKey error = metadatastore.ErrNoSuchKey
 var ErrBadDigest error = metadatastore.ErrBadDigest
+var ErrEntityTooSmall error = metadatastore.ErrEntityTooSmall
 var ErrInvalidPart error = metadatastore.ErrInvalidPart
 var ErrInvalidPartOrder error = metadatastore.ErrInvalidPartOrder
 var ErrMalformedXML error = metadatastore.ErrMalformedXML

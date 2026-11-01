@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"io"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +45,7 @@ func TestGetObjectPartNumber(t *testing.T) {
 		created, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key})
 		require.NoError(t, err)
 		completed := make([]types.CompletedPart, 0, 2)
-		parts := [][]byte{[]byte("first multipart part"), []byte("requested final part")}
+		parts := [][]byte{padToMinPartSize([]byte("first multipart part")), []byte("requested final part")}
 		for i, partBody := range parts {
 			number := int32(i + 1)
 			result, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
@@ -146,6 +147,17 @@ func TestCompleteMultipartUploadPartVerification(t *testing.T) {
 		// setupUpload creates a bucket and a multipart upload with two
 		// uploaded parts and returns the parts as the client would declare
 		// them in CompleteMultipartUpload.
+		// Part 1 is padded to the minimum part size so it can precede part 2.
+		verificationPartBody := func(partNumber int32) []byte {
+			content := []byte(fmt.Sprintf("part %d content", partNumber))
+			if partNumber == 1 {
+				return padToMinPartSize(content)
+			}
+			return content
+		}
+		lastPartSize := int64(len("part 2 content"))
+		objectSize := int64(minPartSize) + lastPartSize
+
 		setupUpload := func(t *testing.T) (*s3.Client, *string, []types.CompletedPart) {
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
@@ -167,7 +179,7 @@ func TestCompleteMultipartUploadPartVerification(t *testing.T) {
 					Key:        key,
 					UploadId:   createResult.UploadId,
 					PartNumber: aws.Int32(partNumber),
-					Body:       bytes.NewReader([]byte(fmt.Sprintf("part %d content", partNumber))),
+					Body:       bytes.NewReader(verificationPartBody(partNumber)),
 				})
 				require.NoError(t, err)
 				completedParts = append(completedParts, types.CompletedPart{
@@ -275,7 +287,7 @@ func TestCompleteMultipartUploadPartVerification(t *testing.T) {
 					UploadId:          createResult.UploadId,
 					PartNumber:        aws.Int32(partNumber),
 					ChecksumAlgorithm: algorithm,
-					Body:              bytes.NewReader([]byte(fmt.Sprintf("part %d content", partNumber))),
+					Body:              bytes.NewReader(verificationPartBody(partNumber)),
 				})
 				require.NoError(t, err)
 				completedParts = append(completedParts, types.CompletedPart{
@@ -327,22 +339,22 @@ func TestCompleteMultipartUploadPartVerification(t *testing.T) {
 
 		t.Run("it should reject completing a multipart upload with a mismatching object size"+testSuffix, func(t *testing.T) {
 			s3Client, uploadId, completedParts := setupUpload(t)
-			err := completeUploadWithObjectSize(s3Client, uploadId, completedParts, 29)
+			err := completeUploadWithObjectSize(s3Client, uploadId, completedParts, objectSize+1)
 			assertApiError(t, err, "InvalidRequest")
 			var apiErr smithy.APIError
 			require.ErrorAs(t, err, &apiErr)
-			assert.Equal(t, "The provided 'x-amz-mp-object-size' header value 29 does not match the actual object size 28.", apiErr.ErrorMessage())
+			assert.Equal(t, fmt.Sprintf("The provided 'x-amz-mp-object-size' header value %d does not match the actual object size %d.", objectSize+1, objectSize), apiErr.ErrorMessage())
 
 			// The rejected completion leaves the upload intact.
-			err = completeUploadWithObjectSize(s3Client, uploadId, completedParts, 28)
+			err = completeUploadWithObjectSize(s3Client, uploadId, completedParts, objectSize)
 			assert.NoError(t, err)
 		})
 
 		t.Run("it should check the object size against the listed parts only"+testSuffix, func(t *testing.T) {
 			s3Client, uploadId, completedParts := setupUpload(t)
-			err := completeUploadWithObjectSize(s3Client, uploadId, completedParts[1:], 28)
+			err := completeUploadWithObjectSize(s3Client, uploadId, completedParts[1:], objectSize)
 			assertApiError(t, err, "InvalidRequest")
-			err = completeUploadWithObjectSize(s3Client, uploadId, completedParts[1:], 14)
+			err = completeUploadWithObjectSize(s3Client, uploadId, completedParts[1:], lastPartSize)
 			assert.NoError(t, err)
 		})
 
@@ -423,9 +435,7 @@ func TestMultipartUpload(t *testing.T) {
 					{PartNumber: aws.Int32(1), ETag: uploadPartResult.ETag},
 				}},
 			})
-			if err != nil {
-				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
-			}
+			require.NoError(t, err, "CompleteMultipartUpload failed")
 			assert.NotNil(t, completeMultipartUploadResult)
 			assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
 			assert.Equal(t, key, completeMultipartUploadResult.Key)
@@ -671,7 +681,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[2:]),
+				Body:       bytes.NewReader(multipartPart2),
 				Key:        key,
 				UploadId:   uploadId,
 				PartNumber: aws.Int32(2),
@@ -685,7 +695,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[0:2]),
+				Body:       bytes.NewReader(multipartPart1),
 				Key:        key,
 				UploadId:   uploadId,
 				PartNumber: aws.Int32(1),
@@ -706,9 +716,7 @@ func TestMultipartUpload(t *testing.T) {
 					{PartNumber: aws.Int32(2), ETag: part2ETag},
 				}},
 			})
-			if err != nil {
-				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
-			}
+			require.NoError(t, err, "CompleteMultipartUpload failed")
 			assert.NotNil(t, completeMultipartUploadResult)
 			assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
 			assert.Equal(t, key, completeMultipartUploadResult.Key)
@@ -738,7 +746,7 @@ func TestMultipartUpload(t *testing.T) {
 			assert.NotNil(t, getObjectResult.Body)
 			objectBytes, err := io.ReadAll(getObjectResult.Body)
 			assert.Nil(t, err)
-			assert.Equal(t, body, objectBytes)
+			assert.Equal(t, multipartBody, objectBytes)
 		})
 
 		t.Run("it should allow listing parts of multipart uploads"+testSuffix, func(t *testing.T) {
@@ -1027,7 +1035,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[2:]),
+				Body:       bytes.NewReader(multipartPart2),
 				Key:        key,
 				UploadId:   uploadId,
 				PartNumber: aws.Int32(2),
@@ -1041,7 +1049,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[0:2]),
+				Body:       bytes.NewReader(multipartPart1),
 				Key:        key,
 				UploadId:   uploadId,
 				PartNumber: aws.Int32(1),
@@ -1062,9 +1070,7 @@ func TestMultipartUpload(t *testing.T) {
 					{PartNumber: aws.Int32(2), ETag: part2ETag},
 				}},
 			})
-			if err != nil {
-				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
-			}
+			require.NoError(t, err, "CompleteMultipartUpload failed")
 			assert.NotNil(t, completeMultipartUploadResult)
 			assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
 			assert.Equal(t, key, completeMultipartUploadResult.Key)
@@ -1085,7 +1091,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult2, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[2:]),
+				Body:       bytes.NewReader(multipartPart2),
 				Key:        key,
 				UploadId:   uploadId2,
 				PartNumber: aws.Int32(2),
@@ -1099,7 +1105,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult2, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[0:2]),
+				Body:       bytes.NewReader(multipartPart1),
 				Key:        key,
 				UploadId:   uploadId2,
 				PartNumber: aws.Int32(1),
@@ -1120,9 +1126,7 @@ func TestMultipartUpload(t *testing.T) {
 					{PartNumber: aws.Int32(2), ETag: part2ETag2},
 				}},
 			})
-			if err != nil {
-				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
-			}
+			require.NoError(t, err, "CompleteMultipartUpload failed")
 			assert.NotNil(t, completeMultipartUploadResult2)
 			assert.Equal(t, bucketName, completeMultipartUploadResult2.Bucket)
 			assert.Equal(t, key, completeMultipartUploadResult2.Key)
@@ -1152,7 +1156,7 @@ func TestMultipartUpload(t *testing.T) {
 			assert.NotNil(t, getObjectResult.Body)
 			objectBytes, err := io.ReadAll(getObjectResult.Body)
 			assert.Nil(t, err)
-			assert.Equal(t, body, objectBytes)
+			assert.Equal(t, multipartBody, objectBytes)
 		})
 
 		t.Run("it should allow two multipart uploads on same key after abort first"+testSuffix, func(t *testing.T) {
@@ -1182,7 +1186,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[2:]),
+				Body:       bytes.NewReader(multipartPart2),
 				Key:        key,
 				UploadId:   uploadId,
 				PartNumber: aws.Int32(2),
@@ -1195,7 +1199,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[0:2]),
+				Body:       bytes.NewReader(multipartPart1),
 				Key:        key,
 				UploadId:   uploadId,
 				PartNumber: aws.Int32(1),
@@ -1232,7 +1236,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult2, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[2:]),
+				Body:       bytes.NewReader(multipartPart2),
 				Key:        key,
 				UploadId:   uploadId2,
 				PartNumber: aws.Int32(2),
@@ -1246,7 +1250,7 @@ func TestMultipartUpload(t *testing.T) {
 
 			uploadPartResult2, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(body[0:2]),
+				Body:       bytes.NewReader(multipartPart1),
 				Key:        key,
 				UploadId:   uploadId2,
 				PartNumber: aws.Int32(1),
@@ -1267,9 +1271,7 @@ func TestMultipartUpload(t *testing.T) {
 					{PartNumber: aws.Int32(2), ETag: part2ETag2},
 				}},
 			})
-			if err != nil {
-				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
-			}
+			require.NoError(t, err, "CompleteMultipartUpload failed")
 			assert.NotNil(t, completeMultipartUploadResult2)
 			assert.Equal(t, bucketName, completeMultipartUploadResult2.Bucket)
 			assert.Equal(t, key, completeMultipartUploadResult2.Key)
@@ -1299,7 +1301,7 @@ func TestMultipartUpload(t *testing.T) {
 			assert.NotNil(t, getObjectResult.Body)
 			objectBytes, err := io.ReadAll(getObjectResult.Body)
 			assert.Nil(t, err)
-			assert.Equal(t, body, objectBytes)
+			assert.Equal(t, multipartBody, objectBytes)
 		})
 
 		t.Run("it should reject stale If-Match CompleteMultipartUpload during concurrent completes"+testSuffix, func(t *testing.T) {
@@ -1614,21 +1616,24 @@ func TestUploadPartCopy(t *testing.T) {
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
-			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body)})
+			// Part 1 must meet the minimum part size, so pad "Hello," to it.
+			firstRange := padToMinPartSize([]byte("Hello,"))
+			source := slices.Concat(firstRange, []byte(" world!"))
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(source)})
 			assert.Nil(t, err)
 
 			createResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key2})
 			assert.Nil(t, err)
 			uploadId := createResult.UploadId
 
-			// Copy "Hello," (bytes 0-5) as part 1 and "world!" (bytes 7-12) as part 2.
+			// Copy the padded "Hello," as part 1 and "world!" as part 2, skipping the space.
 			part1, err := s3Client.UploadPartCopy(context.Background(), &s3.UploadPartCopyInput{
 				Bucket:          bucketName,
 				Key:             key2,
 				UploadId:        uploadId,
 				PartNumber:      aws.Int32(1),
 				CopySource:      aws.String(*bucketName + "/" + *key),
-				CopySourceRange: aws.String("bytes=0-5"),
+				CopySourceRange: aws.String(fmt.Sprintf("bytes=0-%d", len(firstRange)-1)),
 			})
 			assert.Nil(t, err)
 			part2, err := s3Client.UploadPartCopy(context.Background(), &s3.UploadPartCopyInput{
@@ -1637,7 +1642,7 @@ func TestUploadPartCopy(t *testing.T) {
 				UploadId:        uploadId,
 				PartNumber:      aws.Int32(2),
 				CopySource:      aws.String(*bucketName + "/" + *key),
-				CopySourceRange: aws.String("bytes=7-12"),
+				CopySourceRange: aws.String(fmt.Sprintf("bytes=%d-%d", len(firstRange)+1, len(source)-1)),
 			})
 			assert.Nil(t, err)
 
@@ -1652,13 +1657,13 @@ func TestUploadPartCopy(t *testing.T) {
 					},
 				},
 			})
-			assert.Nil(t, err)
+			require.NoError(t, err)
 
 			getResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key2})
 			assert.Nil(t, err)
 			objectBytes, err := io.ReadAll(getResult.Body)
 			assert.Nil(t, err)
-			assert.Equal(t, []byte("Hello,world!"), objectBytes)
+			assert.Equal(t, slices.Concat(firstRange, []byte("world!")), objectBytes)
 		})
 
 		t.Run("it should honor copy-source-if-match for UploadPartCopy"+testSuffix, func(t *testing.T) {

@@ -227,6 +227,7 @@ var s3ErrorMappings = []struct {
 	{ErrInvalidRequest, 400, ""},
 	{ErrInvalidArgument, 400, ""},
 	{ErrMissingContentLength, http.StatusLengthRequired, ""},
+	{storage.ErrEntityTooSmall, 400, "Your proposed upload is smaller than the minimum allowed object size. Each part must be at least 5 MB in size, except the last part."},
 	{storage.ErrInvalidPart, 400, ""},
 	{storage.ErrInvalidPartOrder, 400, ""},
 	{storage.ErrMalformedXML, 400, ""},
