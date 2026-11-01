@@ -246,7 +246,6 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 		readerLeases:       newReaderLeases(readerLeaseStore, leaseFreeWindow),
 		tracer:             otel.Tracer("internal/storage/metadatapart"),
 	}
-	mbs.readerLeases.revalidate = mbs.revalidateSnapshot
 	return mbs, nil
 }
 

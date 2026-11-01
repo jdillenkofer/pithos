@@ -33,7 +33,6 @@ func TestProtectedDatabaseKeepsStartTimeOfInnerTransaction(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, inner.begun.StartedAt(), tx.StartedAt())
 		require.Equal(t, inner.begun.StatementSnapshots(), tx.StatementSnapshots())
-		require.Equal(t, inner.begun.Isolation(), tx.Isolation())
 		require.NoError(t, tx.Rollback(context.Background()))
 	}
 }

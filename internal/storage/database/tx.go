@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -20,10 +19,11 @@ import (
 // read-only connection pool), so the mismatch is rejected up front.
 var ErrWriteInReadOnlyTransaction = errors.New("cannot begin writable transaction inside read-only transaction")
 
-// ErrIsolationTooWeak is returned by BeginTx when the requested isolation
-// level is stricter than that of the transaction already active on the same
-// database in the context, which BeginTx would otherwise reuse silently.
-var ErrIsolationTooWeak = errors.New("cannot begin transaction with stricter isolation inside a weaker transaction")
+// ErrNestedIsolation is returned by BeginTx when a transaction that would
+// join the one already active on the same database in the context asks for
+// an isolation level. Only the root transaction chooses it, so BeginTx would
+// otherwise ignore the request silently.
+var ErrNestedIsolation = errors.New("cannot choose an isolation level inside an active transaction")
 
 type Tx interface {
 	SqlTx() *sql.Tx
@@ -49,9 +49,6 @@ type TxController struct {
 	// committed state (PostgreSQL READ COMMITTED, SQLite writers) instead of
 	// one snapshot taken at the first statement.
 	statementSnapshots bool
-	// isolation is the effective isolation level of the transaction; the
-	// database resolves sql.LevelDefault to the level it applies.
-	isolation sql.IsolationLevel
 }
 
 func NewTx(tx *sql.Tx) *TxController {
@@ -84,45 +81,16 @@ func (t *TxController) WithStartedAt(startedAt time.Time) *TxController {
 	return t
 }
 
-// WithIsolation records the effective isolation level of the transaction.
-func (t *TxController) WithIsolation(isolation sql.IsolationLevel) *TxController {
-	t.rootTx().isolation = isolation
-	return t
-}
-
-// Isolation returns the effective isolation level of the (root) transaction.
-func (t *TxController) Isolation() sql.IsolationLevel {
-	return t.rootTx().isolation
-}
-
-// isolationRank orders isolation levels by strength.
-func isolationRank(level sql.IsolationLevel) int {
-	switch level {
-	case sql.LevelReadUncommitted:
-		return 1
-	case sql.LevelReadCommitted, sql.LevelWriteCommitted:
-		return 2
-	case sql.LevelRepeatableRead, sql.LevelSnapshot:
-		return 3
-	case sql.LevelSerializable:
-		return 4
-	case sql.LevelLinearizable:
-		return 5
-	default:
-		return 0
-	}
-}
-
 // Nested returns a child of the active transaction t for a BeginTx with
-// opts. It rejects a writable transaction inside a read-only one and an
-// isolation level stricter than t's; sql.LevelDefault accepts t's level.
-// Nil opts ask for a writable transaction.
+// opts. It rejects a writable transaction inside a read-only one and any
+// isolation level but sql.LevelDefault. Nil opts ask for a writable
+// transaction.
 func (t *TxController) Nested(opts *sql.TxOptions) (*TxController, error) {
 	if (opts == nil || !opts.ReadOnly) && t.ReadOnly() {
 		return nil, ErrWriteInReadOnlyTransaction
 	}
-	if opts != nil && opts.Isolation != sql.LevelDefault && isolationRank(opts.Isolation) > isolationRank(t.Isolation()) {
-		return nil, fmt.Errorf("%w: requested %v, active %v", ErrIsolationTooWeak, opts.Isolation, t.Isolation())
+	if opts != nil && opts.Isolation != sql.LevelDefault {
+		return nil, ErrNestedIsolation
 	}
 	return t.Child(), nil
 }

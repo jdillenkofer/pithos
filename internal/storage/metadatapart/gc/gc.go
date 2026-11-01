@@ -150,7 +150,7 @@ func (db *protectedDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (
 		return nil, err
 	}
 
-	protectedTx := database.NewTxController(tx.SqlTx(), db, readOnly).WithStatementSnapshots(tx.StatementSnapshots()).WithStartedAt(tx.StartedAt()).WithIsolation(tx.Isolation())
+	protectedTx := database.NewTxController(tx.SqlTx(), db, readOnly).WithStatementSnapshots(tx.StatementSnapshots()).WithStartedAt(tx.StartedAt())
 	return protectedTx, nil
 }
 
