@@ -22,6 +22,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/buildinfo"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
+	httpmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	authenticationsql "github.com/jdillenkofer/pithos/internal/http/server/authentication/sql"
@@ -97,6 +98,10 @@ const subcommandVersion = "version"
 const readHeaderTimeout = 10 * time.Second
 const monitoringReadTimeout = 30 * time.Second
 const writeTimeout = 0
+
+// writeStallTimeout drops S3 clients that stopped reading a response. Slow
+// clients are only cut off if they accept less than 32 KiB within it.
+const writeStallTimeout = 2 * time.Minute
 const idleTimeout = 2 * time.Minute
 const maxHeaderBytes = 1 << 20
 const gracefulShutdownTimeout = 30 * time.Second
@@ -281,6 +286,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		}
 	}
 	handler := server.SetupServer(credentialProvider, settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
+	handler = httpmiddleware.MakeWriteStallTimeoutMiddleware(writeStallTimeout, handler)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	// Do not set ReadTimeout on the S3 server. Object uploads can be as large as
 	// storage.MaxEntitySize, and a global timeout would impose that deadline on
