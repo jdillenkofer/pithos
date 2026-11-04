@@ -19,6 +19,10 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Resolve implicit Testcontainers images (Ryuk) through GHCR. PostgreSQL opts
 # out via registry.hub.docker.com; docker.io would still be rewritten.
 # See internal/testing/images.go for image pins and prefix behavior.
