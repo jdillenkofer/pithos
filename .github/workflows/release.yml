@@ -336,22 +336,30 @@ jobs:
             build-info-pithos-windows-arm64.txt
 
   build-docker:
-    name: Build Multi-Arch OCI Archive
+    name: Build Docker Image (${{ matrix.platform }})
     needs:
       - validate-version
       - run-tests
-    runs-on: ubuntu-latest
+    # Native runners per platform; emulating arm64 under QEMU took ~25 minutes.
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-    outputs:
-      digest: ${{ steps.image.outputs.digest }}
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            slug: linux-amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            slug: linux-arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
-      - name: Build Docker Image (multi-arch, no registry credentials)
+      - name: Build Docker Image (no registry credentials)
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
@@ -360,12 +368,11 @@ jobs:
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           # rewrite-timestamp clamps file times in the layers to
           # SOURCE_DATE_EPOCH, so the layers are reproducible as well.
           outputs: type=oci,dest=${{ runner.temp }}/pithos-image.tar,rewrite-timestamp=true
           provenance: mode=min
-          # One named index in the archive keeps OCI source selection unambiguous.
           # Registry tags are applied only by the publication job.
           tags: pithos:${{ needs.validate-version.outputs.version }}
           labels: |
@@ -378,7 +385,6 @@ jobs:
             DIRTY=false
             DATE=${{ needs.validate-version.outputs.date }}
       - name: Validate built image digest
-        id: image
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
@@ -386,33 +392,84 @@ jobs:
             echo "Error: Unexpected image digest format"
             exit 1
           fi
-
-          printf 'digest=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"
       # The per-platform digests are the reproducible ones; the multi-arch
-      # digest also covers the provenance attestation and its timestamps.
+      # digest also covers the provenance attestations and their timestamps.
       - name: Record build environment
         env:
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+          SLUG: ${{ matrix.slug }}
           SOURCE_DATE_EPOCH: ${{ needs.validate-version.outputs.epoch }}
         run: |
           {
-            printf '== docker image\n'
+            printf '== docker image %s\n' "$PLATFORM"
             printf 'runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
             printf 'source date epoch: %s\n' "$SOURCE_DATE_EPOCH"
             docker buildx version
             docker buildx inspect | grep -E '^(Driver|BuildKit version):'
             grep -E '^FROM ' Dockerfile
-            printf 'multi-arch OCI digest: %s\n' "$DIGEST"
-            # Include platform and provenance descriptors without a registry read.
+            printf 'single-platform OCI index digest: %s\n' "$DIGEST"
+            # Include image and provenance descriptors without a registry read.
             tar -xOf "${RUNNER_TEMP}/pithos-image.tar" "blobs/sha256/${DIGEST#sha256:}" | jq .
             printf '\n'
-          } > build-info-docker-image.txt
+          } > "build-info-docker-image-${SLUG}.txt"
         shell: bash
       - name: Upload build environment
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: build-info-docker-image
-          path: build-info-docker-image.txt
+          name: build-info-docker-image-${{ matrix.slug }}
+          path: build-info-docker-image-${{ matrix.slug }}.txt
+      - name: Upload OCI archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-oci-platform-${{ matrix.slug }}
+          path: ${{ runner.temp }}/pithos-image.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  merge-docker:
+    name: Merge Multi-Arch OCI Archive
+    needs: [validate-version, build-docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      digest: ${{ steps.merge.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download platform OCI archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: docker-oci-platform-*
+          path: ${{ runner.temp }}/platforms
+      - name: Merge into one multi-platform image index
+        id: merge
+        env:
+          VERSION: ${{ needs.validate-version.outputs.version }}
+        run: |
+          # One named index in the archive keeps OCI source selection unambiguous.
+          digest="$(bash .github/scripts/merge-oci-archives.sh \
+            "${RUNNER_TEMP}/pithos-image.tar" "$VERSION" \
+            "${RUNNER_TEMP}"/platforms/docker-oci-platform-*/pithos-image.tar)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Error: Unexpected image digest format"
+            exit 1
+          fi
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          {
+            printf '== docker image index\n'
+            printf 'multi-arch OCI digest: %s\n' "$digest"
+            tar -xOf "${RUNNER_TEMP}/pithos-image.tar" "blobs/sha256/${digest#sha256:}" | jq .
+            printf '\n'
+          } > build-info-docker-image-index.txt
+      - name: Upload index information
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-info-docker-image-index
+          path: build-info-docker-image-index.txt
       - name: Upload OCI archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -424,7 +481,7 @@ jobs:
 
   publish-docker:
     name: Publish and Sign Multi-Arch Image (no build)
-    needs: [validate-version, build-docker]
+    needs: [validate-version, merge-docker]
     if: >-
       github.event.inputs.dryrun != 'true' &&
       ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
@@ -456,7 +513,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish the exact OCI index and all its manifests
         env:
-          DIGEST: ${{ needs.build-docker.outputs.digest }}
+          DIGEST: ${{ needs.merge-docker.outputs.digest }}
           VERSION: ${{ needs.validate-version.outputs.version }}
           # Skopeo 1.18.0, pinned multi-platform image index.
           SKOPEO: quay.io/skopeo/stable@sha256:c4c8a9d6fc95e331fa92fc31de3f6c9b5fe4761c82f0acb99669eef067fb7c33
@@ -493,7 +550,7 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/jdillenkofer/pithos
-          subject-digest: ${{ needs.build-docker.outputs.digest }}
+          subject-digest: ${{ needs.merge-docker.outputs.digest }}
           push-to-registry: true
           # Artifact metadata storage records are only available to
           # organization-owned repositories; the attestation is still stored
@@ -501,7 +558,7 @@ jobs:
           create-storage-record: false
       - name: Sign and verify the published Docker images
         env:
-          DIGEST: ${{ needs.build-docker.outputs.digest }}
+          DIGEST: ${{ needs.merge-docker.outputs.digest }}
         run: |
           # Sign by immutable digest rather than mutable tags. Both tags
           # (vX.Y.Z and latest) resolve to this single multi-arch digest, so
@@ -586,8 +643,8 @@ jobs:
       - name: Download image build information
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: build-info-docker-image
-          path: binaries/build-info-docker-image
+          pattern: build-info-docker-image-*
+          path: binaries
       - name: Prepare Artifacts and Sign
         run: |
           mkdir -p dist
