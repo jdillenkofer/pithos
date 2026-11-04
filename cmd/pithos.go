@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -287,7 +288,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	}
 	handler := server.SetupServer(credentialProvider, settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
 	handler = httpmiddleware.MakeWriteStallTimeoutMiddleware(writeStallTimeout, handler)
-	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
+	addr := net.JoinHostPort(settings.BindAddress(), strconv.Itoa(settings.Port()))
 	// Do not set ReadTimeout on the S3 server. Object uploads can be as large as
 	// storage.MaxEntitySize, and a global timeout would impose that deadline on
 	// the entire request body and abort otherwise healthy large or slow uploads.
@@ -305,7 +306,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	var httpMonitoringServer *http.Server
 	if settings.MonitoringPortEnabled() {
 		monitoringHandler := server.SetupMonitoringServer(dbs, readiness)
-		monitoringAddr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.MonitoringPort())
+		monitoringAddr := net.JoinHostPort(settings.BindAddress(), strconv.Itoa(settings.MonitoringPort()))
 		httpMonitoringServer = &http.Server{
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 			Addr:              monitoringAddr,
