@@ -2,6 +2,12 @@
 
 ## Environment Variables
 
+Boolean settings accept `true`, `false`, `t`, `f` (case-insensitive), `1`, and
+`0`. Integer settings must be decimal integers within the signed 32-bit range.
+Invalid nonempty values fail startup rather than disabling a setting or silently
+falling back to its default. Empty values are treated as unset. For example,
+`PITHOS_AUTHENTICATION_ENABLED=tru` is an error, not a request to disable authentication.
+
 ### Basic Configuration
 
 | Variable | Description | Default |
