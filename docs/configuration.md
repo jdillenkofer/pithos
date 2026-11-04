@@ -161,7 +161,7 @@ by an interrupted process may need to be cleaned up separately.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PITHOS_MONITORING_PORT` | Port for monitoring endpoints | `9090` |
-| `PITHOS_MONITORING_PORT_ENABLED` | Enable/disable the monitoring port | `true` |
+| `PITHOS_MONITORING_PORT_ENABLED` | Enable/disable the monitoring port | `false` |
 | `PITHOS_METRICS_GAUGES_INTERVAL_SECONDS` | Interval in seconds for periodically sampled storage gauges | `30` |
 
 #### Health probes
@@ -176,8 +176,10 @@ S3 authentication and hostname routing:
 | `/health/readyz` | Returns `200` when initialization and listener binding have completed and all registered database pings succeed; otherwise `503` |
 
 The former `/health` endpoint has been removed and returns `404`. Update existing
-probes to use the explicit liveness or readiness endpoint. Disabling the
-monitoring port also disables these endpoints.
+probes to use the explicit liveness or readiness endpoint. The monitoring port
+is disabled by default; set `PITHOS_MONITORING_PORT_ENABLED=true` to enable these
+endpoints. `/metrics` includes bucket names and per-bucket usage, so do not expose
+the monitoring port publicly.
 
 Readiness checks share a one-second deadline and respect request cancellation.
 They do not perform writes or check object-storage backends, asynchronous
@@ -186,7 +188,8 @@ availability signal: for SQLite they currently check the read-only pool, not
 write capability. With no registered databases, readiness checks only the
 application lifecycle. Use external synthetic S3 checks for end-to-end monitoring.
 
-Example Kubernetes probes (the container must expose a port named `monitoring`):
+Example Kubernetes probes (requires `PITHOS_MONITORING_PORT_ENABLED=true`, and
+the container must expose a port named `monitoring`):
 
 ```yaml
 livenessProbe:
