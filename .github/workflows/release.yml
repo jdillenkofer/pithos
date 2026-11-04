@@ -33,6 +33,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Validate release source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: bash .github/scripts/validate-release-ref.sh
       - name: Validate version format and check if greater than latest
         id: version
         env:
@@ -79,8 +85,8 @@ jobs:
           fi
 
           # Validate version format
-          if [[ ! "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Error: Version must be in format X.Y.Z (e.g. 1.0.0)"
+          if [[ ! "$new_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Error: Version must be in format X.Y.Z without leading zeros (e.g. 1.0.0)"
             exit 1
           fi
 
@@ -329,47 +335,24 @@ jobs:
             pithos-windows-arm64.exe
             build-info-pithos-windows-arm64.txt
 
-  build-and-push-docker:
-    name: Build and Push Multi-Arch Docker Image
+  build-docker:
+    name: Build Multi-Arch OCI Archive
     needs:
       - validate-version
       - run-tests
     runs-on: ubuntu-latest
     permissions:
-      attestations: write # Required to publish GitHub provenance attestations
       contents: read
-      id-token: write # Needed for keyless signing with Cosign
-      packages: write # Required to publish images to GHCR
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Cosign
-        # Pinned to Cosign v2 for Docker image signing. Cosign v3 signs through
-        # a sigstore signing config that mandates the new OCI 1.1 bundle format,
-        # which Docker Hub's incomplete Referrers API support hides from
-        # `cosign verify` ("no signatures found"). v2 defaults to the legacy
-        # sha256-<digest>.sig tag scheme that Docker Hub serves correctly.
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: 'v2.6.3'
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
-      - name: Login to DockerHub
-        if: github.event.inputs.dryrun != 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          username: jdillenkofer
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Login to GitHub Container Registry
-        if: github.event.inputs.dryrun != 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and (optionally) Push Docker Image (multi-arch)
-        id: build-and-push
+      - name: Build Docker Image (multi-arch, no registry credentials)
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
           # Image config and history timestamps use the commit time.
@@ -380,12 +363,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           # rewrite-timestamp clamps file times in the layers to
           # SOURCE_DATE_EPOCH, so the layers are reproducible as well.
-          outputs: type=image,push=${{ github.event.inputs.dryrun != 'true' }},rewrite-timestamp=true
-          tags: |
-            jdillenkofer/pithos:${{ needs.validate-version.outputs.version }}
-            jdillenkofer/pithos:latest
-            ghcr.io/jdillenkofer/pithos:${{ needs.validate-version.outputs.version }}
-            ghcr.io/jdillenkofer/pithos:latest
+          outputs: type=oci,dest=${{ runner.temp }}/pithos-image.tar,rewrite-timestamp=true
+          provenance: mode=min
+          # One named index in the archive keeps OCI source selection unambiguous.
+          # Registry tags are applied only by the publication job.
+          tags: pithos:${{ needs.validate-version.outputs.version }}
           labels: |
             org.opencontainers.image.version=${{ needs.validate-version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -395,11 +377,10 @@ jobs:
             COMMIT=${{ github.sha }}
             DIRTY=false
             DATE=${{ needs.validate-version.outputs.date }}
-      - name: Validate published image digest
+      - name: Validate built image digest
         id: image
-        if: ${{ github.event.inputs.dryrun != 'true' }}
         env:
-          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "Error: Unexpected image digest format"
@@ -412,7 +393,6 @@ jobs:
       - name: Record build environment
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
-          DRY_RUN: ${{ github.event.inputs.dryrun }}
           SOURCE_DATE_EPOCH: ${{ needs.validate-version.outputs.epoch }}
         run: |
           {
@@ -422,9 +402,9 @@ jobs:
             docker buildx version
             docker buildx inspect | grep -E '^(Driver|BuildKit version):'
             grep -E '^FROM ' Dockerfile
-            if [[ "$DRY_RUN" != 'true' ]]; then
-              docker buildx imagetools inspect "ghcr.io/jdillenkofer/pithos@${DIGEST}"
-            fi
+            printf 'multi-arch OCI digest: %s\n' "$DIGEST"
+            # Include platform and provenance descriptors without a registry read.
+            tar -xOf "${RUNNER_TEMP}/pithos-image.tar" "blobs/sha256/${DIGEST#sha256:}" | jq .
             printf '\n'
           } > build-info-docker-image.txt
         shell: bash
@@ -433,21 +413,95 @@ jobs:
         with:
           name: build-info-docker-image
           path: build-info-docker-image.txt
+      - name: Upload OCI archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-oci-archive
+          path: ${{ runner.temp }}/pithos-image.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-docker:
+    name: Publish and Sign Multi-Arch Image (no build)
+    needs: [validate-version, build-docker]
+    if: >-
+      github.event.inputs.dryrun != 'true' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      # No checkout and no project code execution in this privileged job.
+      - name: Download OCI archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-oci-archive
+          path: ${{ runner.temp }}/image
+      - name: Login to DockerHub
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          username: jdillenkofer
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the exact OCI index and all its manifests
+        env:
+          DIGEST: ${{ needs.build-docker.outputs.digest }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
+          # Skopeo 1.18.0, pinned multi-platform image index.
+          SKOPEO: quay.io/skopeo/stable@sha256:c4c8a9d6fc95e331fa92fc31de3f6c9b5fe4761c82f0acb99669eef067fb7c33
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          skopeo() {
+            docker run --rm --network host \
+              --volume "${RUNNER_TEMP}/image:/image:ro" \
+              --volume "${HOME}/.docker/config.json:/auth.json:ro" \
+              "$SKOPEO" "$@"
+          }
+          # Inspect the selected index, not the OCI layout's outer index.json.
+          skopeo inspect --raw oci-archive:/image/pithos-image.tar > source-index.json
+          actual="sha256:$(sha256sum source-index.json | cut -d ' ' -f 1)"
+          [[ "$actual" == "$DIGEST" ]]
+          for image in docker.io/jdillenkofer/pithos ghcr.io/jdillenkofer/pithos; do
+            for tag in "$VERSION" latest; do
+              # --all includes both architectures AND BuildKit provenance.
+              # --preserve-digests fails rather than converting manifest formats.
+              skopeo copy --all --preserve-digests --authfile /auth.json \
+                oci-archive:/image/pithos-image.tar "docker://${image}:${tag}"
+              skopeo inspect --raw --authfile /auth.json "docker://${image}:${tag}" > published-index.json
+              actual="sha256:$(sha256sum published-index.json | cut -d ' ' -f 1)"
+              [[ "$actual" == "$DIGEST" ]]
+            done
+          done
+      - name: Install Cosign
+        # Cosign v2 uses the legacy signature tags supported by Docker Hub.
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v2.6.3'
       - name: Attest GHCR image provenance
-        if: ${{ github.event.inputs.dryrun != 'true' }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/jdillenkofer/pithos
-          subject-digest: ${{ steps.image.outputs.digest }}
+          subject-digest: ${{ needs.build-docker.outputs.digest }}
           push-to-registry: true
           # Artifact metadata storage records are only available to
           # organization-owned repositories; the attestation is still stored
           # with the repository and pushed to GHCR.
           create-storage-record: false
       - name: Sign and verify the published Docker images
-        if: ${{ github.event.inputs.dryrun != 'true' }}
         env:
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ needs.build-docker.outputs.digest }}
         run: |
           # Sign by immutable digest rather than mutable tags. Both tags
           # (vX.Y.Z and latest) resolve to this single multi-arch digest, so
@@ -470,9 +524,13 @@ jobs:
 
   release:
     name: Create Release
-    needs: [validate-version, build-linux-amd64, build-linux-arm64, build-darwin, build-windows-amd64, build-windows-arm64, build-and-push-docker]
-    if: github.event.inputs.dryrun != 'true'
+    needs: [validate-version, build-linux-amd64, build-linux-arm64, build-darwin, build-windows-amd64, build-windows-arm64, publish-docker]
+    if: >-
+      github.event.inputs.dryrun != 'true' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write # Required to create the tag and GitHub release
       id-token: write # Needed for keyless signing with Cosign
@@ -523,7 +581,13 @@ jobs:
       - name: Download Binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: pithos-*
           path: binaries
+      - name: Download image build information
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-info-docker-image
+          path: binaries/build-info-docker-image
       - name: Prepare Artifacts and Sign
         run: |
           mkdir -p dist
