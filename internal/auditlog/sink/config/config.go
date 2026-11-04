@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
 	serializationConfig "github.com/jdillenkofer/pithos/internal/auditlog/serialization/config"
+	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 )

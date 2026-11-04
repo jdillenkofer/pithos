@@ -51,12 +51,12 @@ func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection
 }
 
 type PostgresDatabaseConfiguration struct {
-	dbInstance         database.Database
-	DbUrl              internalConfig.StringProvider  `json:"dbUrl"`
-	MaxOpenConns       *internalConfig.Int64Provider  `json:"maxOpenConns,omitempty"`
-	MaxIdleConns       *internalConfig.Int64Provider  `json:"maxIdleConns,omitempty"`
-	ConnMaxLifetime    *internalConfig.StringProvider `json:"connMaxLifetime,omitempty"`
-	ConnMaxIdleTime    *internalConfig.StringProvider `json:"connMaxIdleTime,omitempty"`
+	dbInstance      database.Database
+	DbUrl           internalConfig.StringProvider  `json:"dbUrl"`
+	MaxOpenConns    *internalConfig.Int64Provider  `json:"maxOpenConns,omitempty"`
+	MaxIdleConns    *internalConfig.Int64Provider  `json:"maxIdleConns,omitempty"`
+	ConnMaxLifetime *internalConfig.StringProvider `json:"connMaxLifetime,omitempty"`
+	ConnMaxIdleTime *internalConfig.StringProvider `json:"connMaxIdleTime,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
