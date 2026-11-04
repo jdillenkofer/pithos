@@ -51,7 +51,7 @@ COPY --from=app-builder /etc/ssl/certs /etc/ssl/certs
 COPY --from=app-builder --chown=10001:10001 /tmp-dir /tmp
 COPY --from=app-builder --chown=10001:10001 /data /data
 
-EXPOSE 9000
+EXPOSE 9000 9090
 
 # Run as non-root user
 USER 10001
