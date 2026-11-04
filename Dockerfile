@@ -28,9 +28,6 @@ RUN mkdir -p /data && chown 10001:10001 /data
 
 RUN go build -trimpath -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=${DIRTY} -X github.com/jdillenkofer/pithos/internal/buildinfo.date=${DATE}" -buildmode=pie -o /go/bin/pithos ./cmd
 
-# Change ownership of the binary to appuser
-RUN chown 10001:10001 /go/bin/pithos
-
 FROM scratch
 
 LABEL org.opencontainers.image.title="Pithos" \
@@ -45,7 +42,7 @@ WORKDIR /app
 ENV TMPDIR=/tmp
 
 # Copy binary and minimal passwd file for user mapping
-COPY --from=app-builder /go/bin/pithos /usr/local/bin/pithos
+COPY --from=app-builder --chown=0:0 --chmod=0755 /go/bin/pithos /usr/local/bin/pithos
 COPY --from=app-builder /etc/passwd /etc/passwd
 COPY --from=app-builder /etc/ssl/certs /etc/ssl/certs
 COPY --from=app-builder --chown=10001:10001 /tmp-dir /tmp
