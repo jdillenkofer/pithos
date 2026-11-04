@@ -36,7 +36,7 @@ func TestFileSinkConfiguration_Instantiate(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, s)
 	assert.IsType(t, &sink.WriterSink{}, s)
-	
+
 	// Verify it implements InitialStateProvider
 	isp, ok := s.(sink.InitialStateProvider)
 	assert.True(t, ok)

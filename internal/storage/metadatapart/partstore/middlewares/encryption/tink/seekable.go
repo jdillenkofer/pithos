@@ -44,12 +44,12 @@ type seekableDecryptingReader struct {
 	numSegments   int64
 	plaintextLen  int64
 
-	pos       int64 // current plaintext position
-	segIndex  int64 // segment currently buffered, -1 if none
-	segStart  int64 // plaintext offset where the buffered segment begins
+	pos       int64   // current plaintext position
+	segIndex  int64   // segment currently buffered, -1 if none
+	segStart  int64   // plaintext offset where the buffered segment begins
 	plaintext []byte  // decrypted in place within segBuf
 	segBuf    *[]byte // pooled when css is DefaultSegmentSize
-	rpos      int64 // current offset in r, so sequential segment loads skip the Seek
+	rpos      int64   // current offset in r, so sequential segment loads skip the Seek
 }
 
 const (

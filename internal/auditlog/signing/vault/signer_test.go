@@ -85,13 +85,13 @@ func TestSigner_Sign(t *testing.T) {
 				http.Error(w, "missing input", http.StatusBadRequest)
 				return
 			}
-			
+
 			data, err := base64.StdEncoding.DecodeString(input)
 			if err != nil {
 				http.Error(w, "invalid base64", http.StatusBadRequest)
 				return
 			}
-			
+
 			if string(data) != "data-to-sign" {
 				http.Error(w, "wrong data", http.StatusBadRequest)
 				return
@@ -137,7 +137,7 @@ func TestNewSigner_InvalidArgs(t *testing.T) {
 func TestSigner_RefreshToken(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	// This test is tricky because it involves time and background goroutines.
-	// We can try to trigger it manually or verify the logic in unit test fashion if we expose things, 
+	// We can try to trigger it manually or verify the logic in unit test fashion if we expose things,
 	// but strictly black-box testing the auto-refresh is hard without waiting.
 	// For now, let's verify that refreshToken method works (it's private, but we can call it via reflection or if we are in the same package).
 	// Since we are package vault, we can access private members.
@@ -172,4 +172,3 @@ func TestSigner_RefreshToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, authCalls)
 }
-

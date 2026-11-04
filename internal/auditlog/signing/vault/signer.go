@@ -128,7 +128,7 @@ func (s *Signer) Sign(data []byte) ([]byte, error) {
 	// Usually for Ed25519, we want the raw 64 bytes signature.
 	// But Vault returns it in a specific format.
 	// Let's decode it if it starts with "vault:v1:".
-	
+
 	if strings.HasPrefix(signature, "vault:v") {
 		parts := strings.Split(signature, ":")
 		if len(parts) == 3 {
