@@ -35,6 +35,7 @@ jobs:
           persist-credentials: false
       - name: Validate release source
         env:
+          DRY_RUN: ${{ inputs.dryrun }}
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_REF: ${{ github.ref }}
           RELEASE_SHA: ${{ github.sha }}
