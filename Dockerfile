@@ -1,4 +1,10 @@
-FROM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS app-builder
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.10.0@sha256:40fe21f44bb8cddf1eb1226db190d0a984118f62ee02a91b77d99448d28264a6 AS xx
+
+# The builder runs on the build platform and cross-compiles against the target's
+# musl, so no platform is emulated.
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS app-builder
+
+COPY --from=xx / /
 
 ARG SKIP_TESTS=false
 ARG VERSION=devel
@@ -6,7 +12,8 @@ ARG COMMIT=unknown
 ARG DIRTY=unknown
 ARG DATE=unknown
 
-RUN apk add --no-cache build-base
+# build-base for the native tests; clang and lld for cross-compiling.
+RUN apk add --no-cache build-base clang lld
 
 WORKDIR /go/src/app
 
@@ -16,6 +23,7 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 
+# The tests run natively on the build platform.
 # Match the CI registry prefix for implicit Testcontainers images (Ryuk).
 RUN if [ "$SKIP_TESTS" = "false" ]; then TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=ghcr.io go test ./... -v; fi
 
@@ -26,7 +34,24 @@ RUN adduser -D -u 10001 appuser
 RUN mkdir -m 1777 /tmp-dir
 RUN mkdir -p /data && chown 10001:10001 /data
 
-RUN go build -trimpath -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=${DIRTY} -X github.com/jdillenkofer/pithos/internal/buildinfo.date=${DATE}" -buildmode=pie -o /go/bin/pithos ./cmd
+ARG TARGETPLATFORM
+RUN xx-apk add --no-cache gcc musl-dev
+
+# With -trimpath, Go does not record -ldflags in the binary, so the build
+# information lists them separately.
+RUN ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=${DIRTY} -X github.com/jdillenkofer/pithos/internal/buildinfo.date=${DATE}" && \
+    CGO_ENABLED=1 xx-go build -trimpath -ldflags="$ldflags" -buildmode=pie -o /go/bin/pithos ./cmd && \
+    xx-verify --static /go/bin/pithos && \
+    { \
+      printf 'target platform: %s\n' "$TARGETPLATFORM"; \
+      printf 'c compiler version: %s\n' "$(xx-clang --version | sed -n 1p)"; \
+      printf 'ldflags: %s\n' "$ldflags"; \
+      go version -m /go/bin/pithos; \
+    } > /go/bin/build-info.txt
+
+# Release binary export: docker buildx build --target binary --output type=local,dest=out .
+FROM scratch AS binary
+COPY --from=app-builder /go/bin/pithos /go/bin/build-info.txt /
 
 FROM scratch
 

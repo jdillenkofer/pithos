@@ -126,85 +126,6 @@ jobs:
       contents: read
     uses: ./.github/workflows/test.yml
 
-  build-linux-amd64:
-    name: Build Linux AMD64 Binary
-    needs:
-      - validate-version
-      - run-tests
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          cache: false
-          go-version-file: go.mod
-      - name: Build Binary
-        env:
-          GOOS: linux
-          GOARCH: amd64
-          CGO_ENABLED: 1
-          VERSION: ${{ needs.validate-version.outputs.version }}
-          COMMIT: ${{ github.sha }}
-          DATE: ${{ needs.validate-version.outputs.date }}
-        run: |
-          ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false -X github.com/jdillenkofer/pithos/internal/buildinfo.date=${DATE}"
-          go build -trimpath -ldflags="$ldflags" -buildmode=pie -o pithos-linux-amd64 ./cmd
-          bash .github/scripts/write-build-info.sh pithos-linux-amd64 build-info-pithos-linux-amd64.txt "$ldflags"
-      - name: Upload Binary
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: pithos-linux-amd64
-          path: |
-            pithos-linux-amd64
-            build-info-pithos-linux-amd64.txt
-
-  build-linux-arm64:
-    name: Build Linux ARM64 Binary
-    needs:
-      - validate-version
-      - run-tests
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          cache: false
-          go-version-file: go.mod
-      - name: Install Cross-Compilation Tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Build Binary
-        env:
-          GOOS: linux
-          GOARCH: arm64
-          CGO_ENABLED: 1
-          CC: aarch64-linux-gnu-gcc
-          VERSION: ${{ needs.validate-version.outputs.version }}
-          COMMIT: ${{ github.sha }}
-          DATE: ${{ needs.validate-version.outputs.date }}
-        run: |
-          ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false -X github.com/jdillenkofer/pithos/internal/buildinfo.date=${DATE}"
-          go build -trimpath -ldflags="$ldflags" -buildmode=pie -o pithos-linux-arm64 ./cmd
-          bash .github/scripts/write-build-info.sh pithos-linux-arm64 build-info-pithos-linux-arm64.txt "$ldflags"
-      - name: Upload Binary
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: pithos-linux-arm64
-          path: |
-            pithos-linux-arm64
-            build-info-pithos-linux-arm64.txt
-
   build-darwin:
     name: Build Darwin Binaries
     needs:
@@ -340,8 +261,9 @@ jobs:
     needs:
       - validate-version
       - run-tests
-    # Native runners per platform; emulating arm64 under QEMU took ~25 minutes.
-    runs-on: ${{ matrix.runner }}
+    # The Dockerfile cross-compiles against each target's musl, so no platform
+    # is emulated and every platform builds on the same runner type.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
@@ -349,10 +271,16 @@ jobs:
         include:
           - platform: linux/amd64
             slug: linux-amd64
-            runner: ubuntu-latest
           - platform: linux/arm64
             slug: linux-arm64
-            runner: ubuntu-24.04-arm
+          - platform: linux/arm/v7
+            slug: linux-armv7
+          - platform: linux/riscv64
+            slug: linux-riscv64
+          - platform: linux/ppc64le
+            slug: linux-ppc64le
+          - platform: linux/s390x
+            slug: linux-s390x
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -427,6 +355,47 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+      # Reuses the image build's cached builder stage.
+      - name: Export Linux release binary
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.validate-version.outputs.epoch }}
+        with:
+          context: .
+          file: Dockerfile
+          target: binary
+          platforms: ${{ matrix.platform }}
+          outputs: type=local,dest=${{ runner.temp }}/binary
+          provenance: false
+          build-args: |
+            SKIP_TESTS=true
+            VERSION=${{ needs.validate-version.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DIRTY=false
+            DATE=${{ needs.validate-version.outputs.date }}
+      - name: Record binary build environment
+        env:
+          BINARY_NAME: pithos-${{ matrix.slug }}
+          SOURCE_DATE_EPOCH: ${{ needs.validate-version.outputs.epoch }}
+        run: |
+          mv "${RUNNER_TEMP}/binary/pithos" "$BINARY_NAME"
+          {
+            printf '== %s\n' "$BINARY_NAME"
+            printf 'runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            printf 'source date epoch: %s\n' "$SOURCE_DATE_EPOCH"
+            docker buildx version
+            grep -E '^FROM ' Dockerfile
+            cat "${RUNNER_TEMP}/binary/build-info.txt"
+            printf '\n'
+          } > "build-info-${BINARY_NAME}.txt"
+      - name: Upload Binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pithos-${{ matrix.slug }}
+          path: |
+            pithos-${{ matrix.slug }}
+            build-info-pithos-${{ matrix.slug }}.txt
+          if-no-files-found: error
 
   merge-docker:
     name: Merge Multi-Arch OCI Archive
@@ -581,7 +550,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [validate-version, build-linux-amd64, build-linux-arm64, build-darwin, build-windows-amd64, build-windows-arm64, publish-docker]
+    needs: [validate-version, build-docker, build-darwin, build-windows-amd64, build-windows-arm64, publish-docker]
     if: >-
       github.event.inputs.dryrun != 'true' &&
       ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
@@ -650,6 +619,10 @@ jobs:
           mkdir -p dist
           cp binaries/pithos-linux-amd64/pithos-linux-amd64 dist/
           cp binaries/pithos-linux-arm64/pithos-linux-arm64 dist/
+          cp binaries/pithos-linux-armv7/pithos-linux-armv7 dist/
+          cp binaries/pithos-linux-riscv64/pithos-linux-riscv64 dist/
+          cp binaries/pithos-linux-ppc64le/pithos-linux-ppc64le dist/
+          cp binaries/pithos-linux-s390x/pithos-linux-s390x dist/
           cp binaries/pithos-darwin-amd64/pithos-darwin-amd64 dist/
           cp binaries/pithos-darwin-arm64/pithos-darwin-arm64 dist/
           cp binaries/pithos-windows-amd64/pithos-windows-amd64.exe dist/
