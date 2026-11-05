@@ -49,7 +49,8 @@ go test ./...
 
 ## Docker
 
-Release images for `linux/amd64` and `linux/arm64` are published to GitHub
+Release images for `linux/amd64`, `linux/arm64`, `linux/arm/v7`,
+`linux/riscv64`, `linux/ppc64le` and `linux/s390x` are published to GitHub
 Container Registry and Docker Hub. Pull and run the GHCR image with:
 
 ```sh
