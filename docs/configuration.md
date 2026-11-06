@@ -34,6 +34,7 @@ falling back to its default. Empty values are treated as unset. For example,
 | `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
 | `PITHOS_AUTHORIZER_TYPE` | Authorization backend: `lua` or `policy` | `lua` |
 | `PITHOS_AUTHORIZER_TIMEOUT_MILLISECONDS` | Maximum Lua execution time per authorization; must be positive | `250` |
+| `PITHOS_AUTHORIZER_MAX_INSTRUCTIONS` | Maximum Lua VM instructions per authorization; must be positive | `50000000` |
 | `PITHOS_POLICY_PATH` | Path to the policy JSON file in policy mode | `./policies.json` |
 | `PITHOS_POLICY_RELOAD_INTERVAL_SECONDS` | Policy refresh interval; `0` loads only at startup | `5` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
@@ -47,7 +48,7 @@ The provider settings may also be set with the `-credentialsProvider`,
 The credential values themselves are never accepted as arguments.
 
 Authorization settings have matching `-authorizerType`, `-authorizerPath`,
-`-authorizerTimeoutMilliseconds`, `-policyPath`, and
+`-authorizerTimeoutMilliseconds`, `-authorizerMaxInstructions`, `-policyPath`, and
 `-policyReloadIntervalSeconds` flags. See
 [Policy Authorization](policy-authorization.md) for the supported language and
 operation matrix.
@@ -139,9 +140,10 @@ VALUES
     ('new-key', 'new-secret', 'storage-account', 'storage-client');
 ```
 
-Set `enabled` to `FALSE` or delete a row to revoke it. The `version`,
-`created_at`, and `updated_at` columns are reserved for managed updates by a
-future administration API. Secret access keys are stored in reversible form
+Set `enabled` to `FALSE` or delete a row to revoke it. Direct database edits
+take effect at the next reload. The [admin UI](admin-ui.md) can also create
+and delete SQL credentials; its changes take effect immediately. The `version`,
+`created_at`, and `updated_at` columns are reserved for future managed updates. Secret access keys are stored in reversible form
 because SigV4 verification requires them; protect the database with strict
 access controls and storage-level encryption.
 
@@ -168,6 +170,7 @@ by an interrupted process may need to be cleaned up separately.
 |----------|-------------|---------|
 | `PITHOS_MONITORING_PORT` | Port for monitoring endpoints | `9090` |
 | `PITHOS_MONITORING_PORT_ENABLED` | Enable/disable the monitoring port | `false` |
+| `PITHOS_MONITORING_BIND_ADDRESS` | Monitoring listener bind address | Inherits `PITHOS_BIND_ADDRESS` (`0.0.0.0`) |
 | `PITHOS_METRICS_GAUGES_INTERVAL_SECONDS` | Interval in seconds for periodically sampled storage gauges | `30` |
 
 #### Health probes
@@ -228,6 +231,34 @@ cleanup. Long uploads may exceed the current 30-second request-shutdown budget.
 The runtime image uses `scratch` and contains no shell, `curl`, or `sleep`; hooks
 and container-local healthchecks cannot assume those utilities exist.
 
+### Admin UI
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PITHOS_ADMIN_PORT_ENABLED` | Enable the admin listener; stays disabled when authentication is disabled | `false` |
+| `PITHOS_ADMIN_PORT` | Port for the admin UI | `9001` |
+| `PITHOS_ADMIN_BIND_ADDRESS` | Admin listener bind address | Inherits `PITHOS_BIND_ADDRESS` (`0.0.0.0`) |
+| `PITHOS_ADMIN_ACCESS_KEYS` | Comma-separated access-key allowlist for global admin UI access | Empty (no logins allowed) |
+| `PITHOS_ADMIN_SECURE_COOKIE` | Require HTTPS for admin session cookies; set `false` for plain-HTTP local use | `true` |
+| `PITHOS_ADMIN_SESSION_IDLE_MINUTES` | Session idle timeout in minutes | `30` |
+| `PITHOS_ADMIN_SESSION_MAX_HOURS` | Maximum session lifetime in hours | `12` |
+| `PITHOS_ADMIN_DATABASE_INDEX` | Zero-based configured database index used for admin sessions | `0` |
+
+See [Admin Web UI](admin-ui.md) for setup, session security, provider support,
+policy saving, and diagnostic limits. A nonempty allowlist requires a valid
+SQLite/PostgreSQL session database at the configured index.
+
+The listener uses plain HTTP, like the S3 and monitoring endpoints. Admin
+cookies are Secure by default, so browse the UI through an HTTPS reverse proxy.
+For local plain-HTTP use, opt out with `PITHOS_ADMIN_SECURE_COOKIE=false`.
+The allowlist grants global admin UI access across all accounts; it does not
+change S3 API permissions or policy/Lua authorization. Only allowlisted
+credentials may log in. An empty allowlist grants nobody access.
+
+Equivalent command-line flags are `-adminPortEnabled`, `-adminPort`,
+`-adminBindAddress`, `-adminAccessKeys`, `-adminSecureCookie`,
+`-adminSessionIdleMinutes`, `-adminSessionMaxHours`, and `-adminDatabaseIndex`.
+
 ### Logging
 
 | Variable | Description | Default |
@@ -286,11 +317,14 @@ and the base functions `dofile`, `loadfile`, and `load` are removed, so a
 script cannot read files or compile code at runtime.
 
 Each evaluation, including the script's top-level code, is limited to 250 ms
-of Lua execution (`PITHOS_AUTHORIZER_TIMEOUT_MILLISECONDS`) and is also
-aborted when the client disconnects. The limit cannot be disabled: `0` and
-negative values fail startup. An aborted
+of Lua execution (`PITHOS_AUTHORIZER_TIMEOUT_MILLISECONDS`) and to 50 million
+Lua VM instructions (`PITHOS_AUTHORIZER_MAX_INSTRUCTIONS`), and is also
+aborted when the client disconnects. The time limit usually triggers first;
+the instruction limit keeps the bound independent of hardware and load, and
+the admin console's policy validation and simulation apply the same limits.
+Neither limit can be disabled: `0` and negative values fail startup. An aborted
 script denies the request, even if it catches the error with `pcall` or
-`xpcall`; a script whose top-level code exceeds the limit fails startup. Time
+`xpcall`; a script whose top-level code exceeds either limit fails startup. Time
 spent inside a single library call (for example one `string.rep` or pattern
 match) is not interrupted, so keep inputs to such calls bounded. `xpcall`
 message handlers run after the failed call has unwound rather than at the

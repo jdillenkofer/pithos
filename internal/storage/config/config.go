@@ -2,6 +2,8 @@ package config
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -455,10 +457,69 @@ type VaultSigningConfiguration struct {
 type Ed25519SigningConfiguration struct {
 	PrivateKey string                     `json:"privateKey,omitempty"` // File path or base64 encoded
 	Vault      *VaultSigningConfiguration `json:"vault,omitempty"`
+	// PublicKey optionally pins the key used to verify signatures (file path or
+	// base64 encoded). It must match the local private key or, checked with a
+	// probe signature at startup, the Vault-held key. It is required to verify
+	// Vault-held keys.
+	PublicKey string `json:"publicKey,omitempty"`
 }
 
 type MlDsa87SigningConfiguration struct {
 	PrivateKey string `json:"privateKey"` // File path or base64 encoded
+	// PublicKey optionally pins the verification key; it must match PrivateKey.
+	PublicKey string `json:"publicKey,omitempty"`
+}
+
+// VerificationKeys returns the public keys that verify this configuration's
+// signatures: the configured public keys, or those derived from local private
+// keys. ed is nil when the Ed25519 key is held in Vault without a public key.
+func (s *SigningConfiguration) VerificationKeys() (ed ed25519.PublicKey, ml *mldsa.PublicKey, err error) {
+	if s == nil || s.Ed25519 == nil || s.MlDsa87 == nil {
+		return nil, nil, errors.New("signing configuration is incomplete")
+	}
+	switch {
+	case s.Ed25519.PublicKey != "":
+		if ed, err = signing.LoadEd25519PublicKey(s.Ed25519.PublicKey); err != nil {
+			return nil, nil, fmt.Errorf("failed to load Ed25519 public key: %w", err)
+		}
+	case s.Ed25519.Vault == nil && s.Ed25519.PrivateKey != "":
+		private, err := signing.LoadEd25519PrivateKey(s.Ed25519.PrivateKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load Ed25519 private key: %w", err)
+		}
+		ed = private.Public().(ed25519.PublicKey)
+	}
+	if s.MlDsa87.PublicKey != "" {
+		if ml, err = signing.LoadMlDsa87PublicKey(s.MlDsa87.PublicKey); err != nil {
+			return nil, nil, fmt.Errorf("failed to load ML-DSA-87 public key: %w", err)
+		}
+	} else {
+		private, err := signing.LoadMlDsa87PrivateKey(s.MlDsa87.PrivateKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load ML-DSA-87 private key: %w", err)
+		}
+		ml = private.PublicKey()
+	}
+	return ed, ml, nil
+}
+
+// vaultKeyProbe is signed once at startup to check a pinned public key
+// against the Vault-held key, which Vault never exposes to the signer.
+var vaultKeyProbe = []byte("pithos audit signing.ed25519.publicKey check")
+
+func checkPinnedVaultKey(signer signing.Signer, publicKey string) error {
+	edPub, err := signing.LoadEd25519PublicKey(publicKey)
+	if err != nil {
+		return fmt.Errorf("failed to load Ed25519 public key: %w", err)
+	}
+	signature, err := signer.Sign(vaultKeyProbe)
+	if err != nil {
+		return fmt.Errorf("failed to check signing.ed25519.publicKey against Vault: %w", err)
+	}
+	if !ed25519.Verify(edPub, vaultKeyProbe, signature) {
+		return errors.New("signing.ed25519.publicKey does not match the Vault signing key")
+	}
+	return nil
 }
 
 type SigningConfiguration struct {
@@ -535,10 +596,17 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		if vc.KeyPath == "" {
 			return nil, errors.New("signing.ed25519.vault.keyPath is required")
 		}
-		edSigner, err = signingVault.NewSigner(vc.Address, vc.Token, vc.RoleID, vc.SecretID, vc.KeyPath, nil)
+		vaultSigner, err := signingVault.NewSigner(vc.Address, vc.Token, vc.RoleID, vc.SecretID, vc.KeyPath, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Vault signer: %w", err)
 		}
+		if a.Signing.Ed25519.PublicKey != "" {
+			if err = checkPinnedVaultKey(vaultSigner, a.Signing.Ed25519.PublicKey); err != nil {
+				vaultSigner.Close()
+				return nil, err
+			}
+		}
+		edSigner = vaultSigner
 	} else {
 		// Use Local Ed25519 Key
 		if a.Signing.Ed25519.PrivateKey == "" {
@@ -547,6 +615,15 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		edPriv, err := signing.LoadEd25519PrivateKey(a.Signing.Ed25519.PrivateKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load Ed25519 private key: %w", err)
+		}
+		if a.Signing.Ed25519.PublicKey != "" {
+			edPub, err := signing.LoadEd25519PublicKey(a.Signing.Ed25519.PublicKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load Ed25519 public key: %w", err)
+			}
+			if !edPub.Equal(edPriv.Public()) {
+				return nil, errors.New("signing.ed25519.publicKey does not match the private key")
+			}
 		}
 		edSigner = signing.NewEd25519Signer(edPriv)
 	}
@@ -561,6 +638,15 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 	mlPriv, err := signing.LoadMlDsa87PrivateKey(a.Signing.MlDsa87.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load ML-DSA-87 private key: %w", err)
+	}
+	if a.Signing.MlDsa87.PublicKey != "" {
+		mlPub, err := signing.LoadMlDsa87PublicKey(a.Signing.MlDsa87.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load ML-DSA-87 public key: %w", err)
+		}
+		if !mlPub.Equal(mlPriv.PublicKey()) {
+			return nil, errors.New("signing.mlDsa87.publicKey does not match the private key")
+		}
 	}
 
 	var sinks []sink.Sink

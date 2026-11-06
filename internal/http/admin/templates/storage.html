@@ -1,0 +1,12 @@
+{{define "storage"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Storage</span></div>
+<div class="container">
+  <div class="container-head"><div><h2>Storage configuration</h2><p>Middleware and part stores of the configured storage stack. Endpoints, paths, credentials, keys and tokens are hidden. The file on disk may differ from the running store until restart.</p></div></div>
+  <div class="container-body"><ul class="tree">{{template "storage_node" .Tree}}</ul></div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Integrity validation</h2><p>Reads every part of every object version, current and noncurrent, on the running store and checks the part and object checksums. Delete markers carry no data and are skipped. Nothing is deleted or repaired, and there is no time limit. Requires one local database; progress is estimated from the stored part bytes.</p></div></div>
+  <div class="container-body">{{template "storage_progress" .Job}}</div>
+</div>
+{{end}}
+{{define "storage_node"}}<li><span class="node">{{.Kind}}{{range .Fields}}<span class="badge">{{.Name}}: {{.Value}}</span>{{end}}</span>{{if .Children}}<ul>{{range .Children}}{{template "storage_node" .}}{{end}}</ul>{{end}}</li>{{end}}

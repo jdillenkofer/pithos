@@ -102,6 +102,9 @@ func Start(dbs []database.Database, interval time.Duration) *task.TaskHandle {
 		for !cancel.Load() {
 			started := time.Now()
 			err := refresh(context.Background(), dbs)
+			if bucketErr := RefreshBucketUsage(context.Background(), dbs); bucketErr != nil {
+				slog.Debug("Could not refresh bucket usage metrics", "error", bucketErr)
+			}
 			pithosmetrics.ObserveRefresh("storage_database", started, err)
 			if err != nil {
 				slog.Warn("Could not refresh storage database metrics", "error", err)

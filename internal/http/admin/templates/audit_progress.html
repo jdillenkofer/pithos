@@ -1,0 +1,26 @@
+{{define "audit_progress"}}
+<div id="audit-progress" aria-live="polite" {{if .Running}}hx-get="/audit/verify/progress?source={{.Source}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<div class="progress-head">
+  <div>{{if .Running}}<span class="status info">Verifying…</span>{{else if eq .Message "Completed"}}<span class="status ok">Verified</span>{{else if .Message}}<span class="status bad">{{.Message}}</span>{{else}}<span class="status muted">Not started</span>{{end}}</div>
+  <form method="post" action="/audit/verify" hx-post="/audit/verify" hx-target="#audit-progress" hx-swap="outerHTML">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <input type="hidden" name="source" value="{{.Source}}">
+    <button type="submit" class="primary" {{if .Running}}disabled{{end}}>{{if .Running}}Running…{{else if .Started.IsZero}}Verify log{{else}}Verify again{{end}}</button>
+  </form>
+</div>
+{{if not .Started.IsZero}}
+{{$percent := .Percent}}
+<div class="progress-bar">
+  {{if ge $percent 0}}<progress max="100" value="{{$percent}}" aria-label="Verification progress">{{$percent}}%</progress><span class="progress-percent">{{$percent}}%</span>{{else}}<progress aria-label="Verification progress"></progress><span class="progress-percent">…</span>{{end}}
+</div>
+<p class="hint">{{.BytesText}}{{with .TotalText}} of {{.}}{{end}} · {{.Processed}} entries · {{.RateText}}{{if .Running}} · {{.RemainingText}} remaining{{end}}</p>
+{{if .Failure}}<div class="alert bad" role="alert"><p>{{.Failure}}</p></div>{{else if eq .Message "Completed"}}<div class="alert ok"><p>All {{.Processed}} entries verified.</p></div>{{end}}
+<div class="kv">
+  <div><div class="label">Started</div><div class="value">{{.Started.Format "2006-01-02 15:04:05"}}</div></div>
+  <div><div class="label">{{if .Running}}Elapsed{{else}}Duration{{end}}</div><div class="value">{{.DurationText}}</div></div>
+  <div><div class="label">Finished</div><div class="value">{{if .Finished.IsZero}}-{{else}}{{.Finished.Format "2006-01-02 15:04:05"}}{{end}}</div></div>
+</div>
+{{if .Notes}}<div class="progress"><h3>Checked</h3><ul class="checks">{{range .Notes}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{end}}
+</div>
+{{end}}

@@ -1,0 +1,55 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{.CSRF}}">
+  <title>{{.Title}} · Pithos</title>
+  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/admin.css">
+  <script defer src="/static/htmx.min.js"></script>
+  <script defer src="/static/admin.js"></script>
+</head>
+<body {{if not .Authenticated}}class="auth"{{end}} hx-history="false" hx-headers='{"X-CSRF-Token":"{{.CSRF}}"}'>
+{{if .Authenticated}}
+  <header class="topnav">
+    <a class="brand" href="/"><img class="brand-logo" src="/static/logo.svg" alt="" width="26" height="26">Pithos <small>Console</small></a>
+    <span class="spacer"></span>
+    <span class="who">Global admin · <strong>{{.AccessKeyID}}</strong></span>
+    <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button>Sign out</button></form>
+  </header>
+  <div class="app">
+    <nav class="sidenav" aria-label="Administration">
+      <a class="title" href="/">Pithos S3</a>
+      <a class="item" href="/" {{if eq .Section "Dashboard"}}aria-current="page"{{end}}>Dashboard</a>
+      <a class="item" href="/buckets" {{if eq .Section "Buckets"}}aria-current="page"{{end}}>Buckets</a>
+      <hr>
+      <div class="section">Access management</div>
+      <a class="item" href="/credentials" {{if eq .Section "Credentials"}}aria-current="page"{{end}}>Credentials</a>
+      <a class="item" href="/policies" {{if eq .Section "Policies"}}aria-current="page"{{end}}>Policies</a>
+      <hr>
+      <div class="section">Monitoring</div>
+      <a class="item" href="/audit" {{if eq .Section "Audit log"}}aria-current="page"{{end}}>Audit log</a>
+      <a class="item" href="/storage" {{if eq .Section "Storage"}}aria-current="page"{{end}}>Storage</a>
+    </nav>
+    <main id="main" class="content">{{.Content}}</main>
+  </div>
+  <dialog class="modal" id="confirm-dialog" aria-labelledby="confirm-dialog-title">
+    <form method="dialog">
+      <h2 id="confirm-dialog-title" data-confirm-title></h2>
+      <p data-confirm-message></p>
+      <div class="actions-row"><button value="cancel">Cancel</button><button value="confirm" class="danger" data-confirm-action>Delete</button></div>
+    </form>
+  </dialog>
+{{else}}
+  <main id="main" class="login-wrap">{{.Content}}</main>
+{{end}}
+</body>
+</html>{{end}}
+
+{{define "error"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Error</span></div>
+<div class="page-head"><h1>{{.Status}} {{.StatusText}}</h1></div>
+<div class="alert bad" role="alert"><p>{{.Message}}</p></div>
+<div class="actions-row start">{{if .Back}}<a class="button-link primary" href="{{.Back}}">Go back</a>{{end}}<a class="button-link" href="/">Dashboard</a></div>
+{{end}}

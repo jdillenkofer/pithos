@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,13 +19,29 @@ var allowedConditionKeys = []string{
 	"s3:RequestObjectTagKeys", "s3:object-lock-mode", "s3:object-lock-retain-until-date", "s3:object-lock-legal-hold", "s3:object-lock-remaining-retention-days",
 }
 
-var baseOperators = map[string]bool{
-	"StringEquals": true, "StringNotEquals": true, "StringEqualsIgnoreCase": true, "StringNotEqualsIgnoreCase": true, "StringLike": true, "StringNotLike": true,
-	"ArnEquals": true, "ArnLike": true, "ArnNotEquals": true, "ArnNotLike": true,
-	"NumericEquals": true, "NumericNotEquals": true, "NumericLessThan": true, "NumericLessThanEquals": true, "NumericGreaterThan": true, "NumericGreaterThanEquals": true,
-	"DateEquals": true, "DateNotEquals": true, "DateLessThan": true, "DateLessThanEquals": true, "DateGreaterThan": true, "DateGreaterThanEquals": true,
-	"Bool": true, "IpAddress": true, "NotIpAddress": true, "Null": true,
+var conditionOperators = []string{
+	"StringEquals", "StringNotEquals", "StringEqualsIgnoreCase", "StringNotEqualsIgnoreCase", "StringLike", "StringNotLike",
+	"ArnEquals", "ArnLike", "ArnNotEquals", "ArnNotLike",
+	"NumericEquals", "NumericNotEquals", "NumericLessThan", "NumericLessThanEquals", "NumericGreaterThan", "NumericGreaterThanEquals",
+	"DateEquals", "DateNotEquals", "DateLessThan", "DateLessThanEquals", "DateGreaterThan", "DateGreaterThanEquals",
+	"Bool", "IpAddress", "NotIpAddress", "Null",
 }
+
+var baseOperators = func() map[string]bool {
+	operators := map[string]bool{}
+	for _, operator := range conditionOperators {
+		operators[operator] = true
+	}
+	return operators
+}()
+
+// ConditionKeys lists the supported condition keys, without the
+// s3:RequestObjectTag/<name> and s3:ExistingObjectTag/<name> families.
+func ConditionKeys() []string { return slices.Clone(allowedConditionKeys) }
+
+// ConditionOperators lists the base condition operators, without the
+// IfExists suffix and the ForAnyValue: and ForAllValues: prefixes.
+func ConditionOperators() []string { return slices.Clone(conditionOperators) }
 
 func Load(path string) (*Snapshot, error) {
 	info, err := os.Stat(path)

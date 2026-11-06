@@ -137,6 +137,12 @@ func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, pha
 	}
 
 	authType := auditlog.AuthType(auth.Type)
+	if actor, ok := auditlog.AdminActorFromContext(ctx); ok {
+		credentialID = actor.CredentialID
+		accountID = actor.AccountID
+		principalID = actor.PrincipalID
+		authType = actor.AuthType
+	}
 
 	requestID := ""
 	if val := ctx.Value(authentication.RequestIDContextKey{}); val != nil {

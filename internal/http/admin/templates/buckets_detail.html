@@ -1,0 +1,167 @@
+{{define "bucket_header"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><a href="/objects?bucket={{.Name}}">{{.Name}}</a></div>
+<div class="page-head"><div><h1>{{.Name}}</h1>{{if .Owner}}<p class="subtitle">Owner account: {{.Owner}}</p>{{end}}</div></div>
+<nav class="tabs" aria-label="Bucket">
+  <a href="/objects?bucket={{.Name}}" {{if eq .Active "objects"}}aria-current="page"{{end}}>Objects</a>
+  <a href="/buckets/detail?bucket={{.Name}}&amp;tab=versioning" {{if eq .Active "properties"}}aria-current="page"{{end}}>Properties</a>
+  <a href="/buckets/detail?bucket={{.Name}}&amp;tab=cors" {{if eq .Active "permissions"}}aria-current="page"{{end}}>Permissions</a>
+  <a href="/buckets/detail?bucket={{.Name}}&amp;tab=lifecycle" {{if eq .Active "management"}}aria-current="page"{{end}}>Management</a>
+</nav>
+{{end}}
+
+{{define "tag_rows"}}
+<div class="tag-rows" data-tag-rows>
+{{range .}}<div class="tag-row" data-tag-row><label>Key <input name="tag_key" value="{{.Label}}" maxlength="128"></label><label>Value <span class="hint">- optional</span><input name="tag_value" value="{{.Value}}" maxlength="256"></label><button type="button" data-remove-tag>Remove</button></div>{{end}}
+<div class="tag-row" data-tag-row><label>Key <input name="tag_key" maxlength="128"></label><label>Value <span class="hint">- optional</span><input name="tag_value" maxlength="256"></label><button type="button" data-remove-tag>Remove</button></div>
+</div>
+<template><div class="tag-row" data-tag-row><label>Key <input name="tag_key" maxlength="128"></label><label>Value <span class="hint">- optional</span><input name="tag_value" maxlength="256"></label><button type="button" data-remove-tag>Remove</button></div></template>
+{{end}}
+
+{{define "bucket_form_fields"}}<input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket.Name.String}}">{{end}}
+
+{{define "buckets_detail"}}
+{{template "bucket_header" .Header}}
+{{if .NotificationEditor}}
+{{template "notification_editor" .}}
+{{end}}
+{{if .WebsiteRoutingEditor}}
+{{template "website_routing_editor" .}}
+{{end}}
+{{if and (eq .Header.Active "properties") (not .NotificationEditor) (not .WebsiteRoutingEditor)}}
+<div class="container">
+  <div class="container-head"><h2>Bucket overview</h2></div>
+  <div class="container-body"><div class="kv">
+    <div><div class="label">Name</div><div class="value">{{.Bucket.Name.String}}</div></div>
+    <div><div class="label">Owner account</div><div class="value">{{.Bucket.OwnerAccountID}}</div></div>
+    <div><div class="label">Creation date</div><div class="value">{{if .Created}}{{.Created}}{{else}}-{{end}}</div></div>
+  </div></div>
+</div>
+
+<div class="container" id="versioning">
+  <div class="container-head"><div><h2>Bucket Versioning</h2><p>Versioning keeps multiple variants of an object in the same bucket, so you can preserve, retrieve and restore every version of every object.</p></div></div>
+  <div class="container-body">
+    <div class="kv"><div><div class="label">Bucket Versioning</div><div class="value">{{if eq .Versioning "Enabled"}}<span class="status ok">Enabled</span>{{else if eq .Versioning "Suspended"}}<span class="status warn">Suspended</span>{{else}}<span class="status muted">Disabled</span>{{end}}</div></div></div>
+    <details><summary>Edit</summary>
+    <form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="versioning"><input type="hidden" name="editor" value="form">
+      <fieldset><legend>Bucket Versioning</legend>
+        <label class="check"><input type="radio" name="status" value="Suspended" {{if ne .Versioning "Enabled"}}checked{{end}} {{if .ObjectLock.Enabled}}disabled{{end}}> Suspend<span class="hint">&nbsp;- stops creating new versions; existing versions are kept.</span></label>
+        <label class="check"><input type="radio" name="status" value="Enabled" {{if eq .Versioning "Enabled"}}checked{{end}}> Enable</label>
+        {{if .ObjectLock.Enabled}}<p class="hint">Versioning cannot be suspended while Object Lock is enabled.</p>{{end}}
+      </fieldset>
+      <div class="actions-row"><button class="primary">Save changes</button></div>
+    </form>
+    </details>
+  </div>
+</div>
+
+<div class="container" id="tags">
+  <div class="container-head"><div><h2>Tags <span class="count">({{len .Tags}})</span></h2><p>Track storage cost or other criteria by tagging your bucket.</p></div></div>
+  <div class="table-wrap divider"><table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>{{range .Tags}}<tr><td>{{.Label}}</td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="empty"><strong>No tags</strong>There are no tags associated with this bucket.</td></tr>{{end}}</tbody></table></div>
+  <div class="container-body divider">
+    <details><summary>Edit</summary>
+    <form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="tags"><input type="hidden" name="editor" value="form">
+      <div class="tag-editor" data-tag-editor data-max="50">
+        {{template "tag_rows" .Tags}}
+        <div class="actions-row start"><button type="button" data-add-tag>Add new tag</button><span class="hint">You can add up to 50 tags.</span></div>
+      </div>
+      <div class="actions-row"><button class="primary">Save changes</button></div>
+    </form>
+    </details>
+  </div>
+</div>
+
+<div class="container" id="object-lock">
+  <div class="container-head"><div><h2>Object Lock</h2><p>Store objects using a write-once-read-many (WORM) model to help prevent objects from being deleted or overwritten for a fixed amount of time or indefinitely.</p></div></div>
+  <div class="container-body">
+    <div class="kv">
+      <div><div class="label">Object Lock</div><div class="value">{{if .ObjectLock.Enabled}}<span class="status ok">Enabled</span>{{else}}<span class="status muted">Disabled</span>{{end}}</div></div>
+      {{if .ObjectLock.Enabled}}<div><div class="label">Default retention</div><div class="value">{{if .ObjectLock.HasDefault}}{{.ObjectLock.Mode}}, {{.ObjectLock.Period}} {{.ObjectLock.Unit}}{{else}}Disabled{{end}}</div></div>{{end}}
+    </div>
+    {{if .ObjectLock.Enabled}}
+    <details><summary>Edit</summary>
+    <form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="object-lock"><input type="hidden" name="editor" value="form">
+      <fieldset><legend>Default retention</legend>
+        <label class="check"><input type="radio" name="default_retention" value="disabled" {{if not .ObjectLock.HasDefault}}checked{{end}}> Disable</label>
+        <label class="check"><input type="radio" name="default_retention" value="enabled" {{if .ObjectLock.HasDefault}}checked{{end}}> Enable</label>
+      </fieldset>
+      <fieldset><legend>Default retention mode</legend>
+        <label class="check"><input type="radio" name="mode" value="GOVERNANCE" {{if ne .ObjectLock.Mode "COMPLIANCE"}}checked{{end}}> Governance<span class="hint">&nbsp;- users with special permissions can overwrite or delete protected versions.</span></label>
+        <label class="check"><input type="radio" name="mode" value="COMPLIANCE" {{if eq .ObjectLock.Mode "COMPLIANCE"}}checked{{end}}> Compliance<span class="hint">&nbsp;- no user can overwrite or delete protected versions during the retention period.</span></label>
+      </fieldset>
+      <div class="form-grid">
+        <label>Default retention period <input type="number" name="period" min="1" value="{{.ObjectLock.Period}}"></label>
+        <label>Unit <select name="unit"><option {{if eq .ObjectLock.Unit "Days"}}selected{{end}}>Days</option><option {{if eq .ObjectLock.Unit "Years"}}selected{{end}}>Years</option></select></label>
+      </div>
+      <div class="actions-row"><button class="primary">Save changes</button></div>
+    </form>
+    </details>
+    {{else}}<p class="hint">Object Lock is enabled when a bucket is created and cannot be disabled afterwards.</p>{{end}}
+  </div>
+</div>
+
+<div class="container" id="website">
+  <div class="container-head"><div><h2>Static website hosting</h2><p>Use this bucket to host a website or redirect requests.</p></div></div>
+  <div class="container-body">
+    <div class="kv">
+      <div><div class="label">Static website hosting</div><div class="value">{{if .Website.Enabled}}<span class="status ok">Enabled</span>{{else}}<span class="status muted">Disabled</span>{{end}}</div></div>
+      {{if .Website.Enabled}}{{if .Website.Redirect}}
+      <div><div class="label">Hosting type</div><div class="value">Redirect requests for an object</div></div>
+      <div><div class="label">Host name</div><div class="value">{{.Website.Host}}</div></div>
+      <div><div class="label">Protocol</div><div class="value">{{if .Website.Protocol}}{{.Website.Protocol}}{{else}}None{{end}}</div></div>
+      {{else}}
+      <div><div class="label">Hosting type</div><div class="value">Bucket hosting</div></div>
+      <div><div class="label">Index document</div><div class="value">{{.Website.Index}}</div></div>
+      <div><div class="label">Error document</div><div class="value">{{if .Website.Error}}{{.Website.Error}}{{else}}-{{end}}</div></div>
+      {{if .Website.RoutingRules}}<div><div class="label">Redirection rules</div><div class="value"><a href="#website-routing">{{.Website.RoutingRules}}</a></div></div>{{end}}
+      {{end}}{{end}}
+    </div>
+    <details><summary>Edit</summary>
+    <form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="website"><input type="hidden" name="editor" value="form"><input type="hidden" name="website_hash" value="{{.WebsiteHash}}">
+      <fieldset><legend>Static website hosting</legend>
+        <label class="check"><input type="radio" name="website" value="disabled" {{if not .Website.Enabled}}checked{{end}}> Disable</label>
+        <label class="check"><input type="radio" name="website" value="enabled" {{if .Website.Enabled}}checked{{end}}> Enable</label>
+      </fieldset>
+      <fieldset><legend>Hosting type</legend>
+        <label class="check"><input type="radio" name="hosting" value="website" {{if not .Website.Redirect}}checked{{end}}> Host a static website</label>
+        <label class="check"><input type="radio" name="hosting" value="redirect" {{if .Website.Redirect}}checked{{end}}> Redirect requests for an object</label>
+      </fieldset>
+      <div class="form-grid">
+        <label>Index document <input name="index_document" value="{{.Website.Index}}" placeholder="index.html"></label>
+        <label>Error document <span class="hint">- optional</span><input name="error_document" value="{{.Website.Error}}" placeholder="error.html"></label>
+        <label>Redirect host name <input name="redirect_host" value="{{.Website.Host}}" placeholder="example.com"></label>
+        <label>Protocol <select name="redirect_protocol"><option value="" {{if not .Website.Protocol}}selected{{end}}>None</option><option {{if eq .Website.Protocol "https"}}selected{{end}}>https</option><option {{if eq .Website.Protocol "http"}}selected{{end}}>http</option></select></label>
+      </div>
+      <p class="hint">Index and error documents apply to bucket hosting; host name and protocol apply when redirecting all requests. Redirection rules are kept when bucket hosting is kept.</p>
+      {{if .Website.RoutingRules}}<label class="check"><input type="checkbox" name="discard_routing_rules" value="yes"> Remove existing redirection rules when switching to redirect all requests.</label>{{end}}
+      <div class="actions-row"><button class="primary">Save changes</button></div>
+    </form>
+    </details>
+  </div>
+</div>
+
+{{template "website_routing_settings" .}}
+
+{{template "notification_settings" .}}
+{{end}}
+
+{{if eq .Header.Active "permissions"}}
+{{template "cors_settings" .}}
+{{end}}
+
+{{if eq .Header.Active "management"}}
+{{if not .LifecycleEditor}}
+<div class="container" id="lifecycle">
+  <div class="container-head"><div><h2>Lifecycle rules <span class="count">({{len .Lifecycle}})</span></h2><p>Lifecycle rules define actions on objects during their lifetime, such as expiring them or deleting old versions.</p></div><div class="header-actions">{{if .Lifecycle}}<form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="lifecycle"><button class="danger-outline" name="action" value="delete" data-confirm="All lifecycle rules will be removed. Existing objects are not deleted by this action." data-confirm-title="Delete all lifecycle rules?" data-confirm-action="Delete all rules">Delete all rules</button></form>{{end}}<a class="button-link primary" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=lifecycle&amp;editor=create">Create lifecycle rule</a></div></div>
+  <div class="table-wrap divider"><table><thead><tr><th>Lifecycle rule name</th><th>Status</th><th>Scope</th><th>Current version actions</th><th>Noncurrent versions actions</th><th>Other actions</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+  {{range .Lifecycle}}<tr><td>{{.ID}}</td><td>{{if eq .Status "Enabled"}}<span class="status ok">Enabled</span>{{else}}<span class="status muted">{{.Status}}</span>{{end}}</td><td>{{.Scope}}</td><td>{{.Current}}</td><td>{{.Noncurrent}}</td><td>{{.Other}}</td>
+    <td class="actions">{{if .EditURL}}<a class="button-link small" href="{{.EditURL}}">Edit</a>
+      <form method="post" action="/buckets/configure">{{template "bucket_form_fields" $}}<input type="hidden" name="tab" value="lifecycle"><input type="hidden" name="editor" value="form"><input type="hidden" name="rule_action" value="delete"><input type="hidden" name="lifecycle_hash" value="{{$.LifecycleHash}}"><input type="hidden" name="original_id" value="{{.ID}}"><input type="hidden" name="original_index" value="{{.Index}}"><button class="small danger-outline" data-confirm="The rule is removed and its actions stop applying." data-confirm-title="Delete lifecycle rule {{.ID}}?" data-confirm-action="Delete rule">Delete</button></form>{{end}}</td></tr>
+  {{else}}<tr><td colspan="7" class="empty"><strong>No lifecycle rules</strong>There are no lifecycle rules for this bucket.</td></tr>{{end}}
+  </tbody></table></div>
+</div>
+
+{{else}}
+{{template "lifecycle_editor" .}}
+{{end}}
+{{end}}
+{{end}}

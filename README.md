@@ -15,6 +15,7 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 - [S3 Object Lock](docs/object-lock.md): governance/compliance retention, legal hold, synchronous replication recovery and audit
 - Authentication using AWS Signature Version 4
 - Authorization through Lua scripts or IAM-inspired JSON policies
+- [Embedded Admin Web UI](docs/admin-ui.md) on a separate port: global-admin login, dashboard, buckets/objects, credentials, policies, audit and storage diagnostics
 - Configurable storage backends (local filesystem, S3, etc.)
 - Prometheus metrics endpoint for monitoring
 - Health monitoring endpoints
@@ -59,6 +60,7 @@ For detailed documentation, see the [docs](docs/) directory:
 - [Getting Started](docs/getting-started.md) – Installation, build, and Docker setup
 - [CLI Reference](docs/cli-reference.md) – All commands and options
 - [Configuration](docs/configuration.md) – Environment variables and authorization
+- [Admin Web UI](docs/admin-ui.md) – Global-admin setup, security, and management
 - [Account Ownership Update](docs/account-ownership-update.md) – One-time upgrade procedure for existing databases
 - [S3 API Behavior](docs/s3-api.md) – Object metadata, versioning, and SDK-facing semantics
 - [Storage Backends](docs/storage-backends.md) – Storage types and configuration examples

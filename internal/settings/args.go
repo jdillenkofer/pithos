@@ -70,10 +70,20 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	portAccessor := registerIntFlag(serveCommand, "port", defaultPort, "the port for the s3 api")
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
+	monitoringBindAddressAccessor := registerStringFlag(serveCommand, "monitoringBindAddress", "", "the monitoring bind address; defaults to bindAddress")
+	adminPortEnabledAccessor := registerBoolFlag(serveCommand, "adminPortEnabled", defaultAdminPortEnabled, "determines if the admin UI port of pithos is enabled; requires authentication")
+	adminPortAccessor := registerIntFlag(serveCommand, "adminPort", defaultAdminPort, "the port for the admin UI")
+	adminBindAddressAccessor := registerStringFlag(serveCommand, "adminBindAddress", "", "the admin UI bind address; defaults to bindAddress")
+	adminSecureCookieAccessor := registerBoolFlag(serveCommand, "adminSecureCookie", defaultAdminSecureCookie, "require HTTPS for admin session cookies; set to false for plain-HTTP local use")
+	adminSessionIdleMinutesAccessor := registerIntFlag(serveCommand, "adminSessionIdleMinutes", defaultAdminSessionIdleMinutes, "admin session idle timeout in minutes")
+	adminSessionMaxHoursAccessor := registerIntFlag(serveCommand, "adminSessionMaxHours", defaultAdminSessionMaxHours, "maximum admin session lifetime in hours")
+	adminDatabaseIndexAccessor := registerIntFlag(serveCommand, "adminDatabaseIndex", defaultAdminDatabaseIndex, "zero-based configured database index used for admin sessions")
+	adminAccessKeysAccessor := registerStringFlag(serveCommand, "adminAccessKeys", "", "comma-separated access keys allowed full global admin UI access; empty permits no logins")
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer script")
 	authorizerTypeAccessor := registerStringFlag(serveCommand, "authorizerType", defaultAuthorizerType, "authorizer backend: lua or policy")
 	authorizerTimeoutMillisecondsAccessor := registerIntFlag(serveCommand, "authorizerTimeoutMilliseconds", defaultAuthorizerTimeoutMilliseconds, "maximum execution time of one Lua authorizer evaluation in milliseconds")
+	authorizerMaxInstructionsAccessor := registerIntFlag(serveCommand, "authorizerMaxInstructions", defaultAuthorizerMaxInstructions, "maximum Lua VM instructions of one Lua authorizer evaluation")
 	policyPathAccessor := registerStringFlag(serveCommand, "policyPath", defaultPolicyPath, "path to the policy JSON file")
 	policyReloadIntervalSecondsAccessor := registerIntFlag(serveCommand, "policyReloadIntervalSeconds", defaultPolicyReloadIntervalSeconds, "interval between policy reloads; zero disables reload")
 	spoolDirAccessor := registerStringFlag(serveCommand, "spoolDir", defaultSpoolDir, "the directory for temporary spool files")
@@ -102,6 +112,16 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		}
 	}
 
+	var adminAccessKeys []string
+	if raw := adminAccessKeysAccessor(); raw != nil {
+		adminAccessKeys = []string{}
+		for _, part := range strings.Split(*raw, ",") {
+			if key := strings.TrimSpace(part); key != "" {
+				adminAccessKeys = append(adminAccessKeys, key)
+			}
+		}
+	}
+
 	return &Settings{
 		authenticationEnabled:            authenticationEnabledAccessor(),
 		credentialsProvider:              credentialsProviderAccessor(),
@@ -115,10 +135,20 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		port:                             portAccessor(),
 		monitoringPort:                   monitoringPortAccessor(),
 		monitoringPortEnabled:            monitoringPortEnabledAccessor(),
+		monitoringBindAddress:            monitoringBindAddressAccessor(),
+		adminPortEnabled:                 adminPortEnabledAccessor(),
+		adminPort:                        adminPortAccessor(),
+		adminBindAddress:                 adminBindAddressAccessor(),
+		adminSecureCookie:                adminSecureCookieAccessor(),
+		adminSessionIdleMinutes:          adminSessionIdleMinutesAccessor(),
+		adminSessionMaxHours:             adminSessionMaxHoursAccessor(),
+		adminDatabaseIndex:               adminDatabaseIndexAccessor(),
+		adminAccessKeys:                  adminAccessKeys,
 		storageJsonPath:                  storageJsonPathAccessor(),
 		authorizerPath:                   authorizerPathAccessor(),
 		authorizerType:                   authorizerTypeAccessor(),
 		authorizerTimeoutMilliseconds:    authorizerTimeoutMillisecondsAccessor(),
+		authorizerMaxInstructions:        authorizerMaxInstructionsAccessor(),
 		policyPath:                       policyPathAccessor(),
 		policyReloadIntervalSeconds:      policyReloadIntervalSecondsAccessor(),
 		spoolDir:                         spoolDirAccessor(),

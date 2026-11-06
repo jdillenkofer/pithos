@@ -1,0 +1,45 @@
+{{define "buckets"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Buckets</span></div>
+<div class="container">
+  <div class="container-head">
+    <div><h2>Buckets <span class="count">({{.Total}})</span></h2><p>Buckets are containers for objects. All accounts' buckets are shown.</p></div>
+    <div class="toolbar">
+      <button type="submit" form="bucket-selection" formaction="/buckets/empty" class="danger-outline" {{if not .Buckets}}disabled{{end}}>Empty</button>
+      <button type="submit" form="bucket-selection" class="danger-outline" {{if not .Buckets}}disabled{{end}}>Delete</button>
+      <a class="button-link primary" href="/buckets/new">Create bucket</a>
+    </div>
+  </div>
+  <form id="bucket-selection" method="get" action="/buckets/delete"></form>
+  <div class="filter-bar">
+    <form method="get" action="/buckets" role="search"><input class="search" type="search" name="q" value="{{.Query}}" placeholder="Find buckets by name" aria-label="Find buckets by name"></form>
+  </div>
+  <div class="table-wrap"><table>
+  <thead><tr><th class="select"><span class="visually-hidden">Select</span></th><th>Name</th><th>Owner account</th><th class="num">Objects</th><th class="num">Size</th><th>Creation date</th></tr></thead>
+  <tbody>
+  {{range .Buckets}}<tr>
+    <td class="select"><input type="radio" form="bucket-selection" name="bucket" value="{{.Name}}" required aria-label="Select {{.Name}}"></td>
+    <td><a href="/objects?bucket={{.Name}}">{{.Name}}</a></td>
+    <td>{{.Owner}}</td>
+    <td class="num">{{.Objects}}</td>
+    <td class="num">{{.Size}}</td>
+    <td class="nowrap">{{.Created}}</td>
+  </tr>{{else}}<tr><td colspan="6" class="empty">{{if .Query}}<strong>No matches</strong>No buckets match “{{.Query}}”.{{else}}<strong>No buckets</strong>You don't have any buckets.{{end}}</td></tr>{{end}}
+  </tbody></table></div>
+</div>
+{{end}}
+
+{{define "buckets_delete"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><span>Delete bucket</span></div>
+<div class="page-head"><div><h1>Delete bucket</h1></div></div>
+<form method="post" action="/buckets/delete" class="form-narrow">
+<div class="alert warn"><p>Deleting a bucket cannot be undone. Only empty buckets can be deleted; <a href="/buckets/empty?bucket={{.Name}}">empty the bucket</a> first to delete all objects and object versions. Incomplete multipart uploads are aborted with the bucket. After deletion the bucket name can be used again.</p></div>
+<input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Name}}">
+<div class="container">
+  <div class="container-head"><div><h2>Delete bucket “{{.Name}}”?</h2><p>To confirm deletion, enter the name of the bucket in the text input field.</p></div></div>
+  <div class="container-body">
+    <label>Bucket name <input name="confirm" required autocomplete="off" placeholder="{{.Name}}" pattern="{{.Name}}"><span class="hint">Owner account: {{.Owner}}</span></label>
+  </div>
+</div>
+<div class="actions-row"><a class="button-link" href="/buckets">Cancel</a><button type="submit" class="danger">Delete bucket</button></div>
+</form>
+{{end}}

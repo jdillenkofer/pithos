@@ -34,6 +34,15 @@ type Repository interface {
 	FindLatestObjectByBucketNameAndKeyExcludingID(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, excludedObjectID ulid.ULID) (*Entity, error)
 	DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (*bool, error)
 	DeleteObjectByIdAndOptimisticLockVersion(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, optimisticLockVersion int64) (*bool, error)
+	// GroupLiveObjectsByBucket aggregates current completed objects per bucket,
+	// excluding historical versions and delete markers. Empty buckets are included.
+	GroupLiveObjectsByBucket(ctx context.Context, tx *sql.Tx) ([]BucketAggregate, error)
+}
+
+type BucketAggregate struct {
+	BucketName string
+	Count      int64
+	Size       int64
 }
 
 type Entity struct {

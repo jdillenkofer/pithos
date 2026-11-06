@@ -31,6 +31,14 @@ The temporary spool directory can be selected with
 `-spoolDir <path>`. The directory must already exist and be writable by the
 Pithos process. When omitted, Pithos uses the platform temporary directory.
 
+The embedded [admin UI](admin-ui.md) is disabled by default. Pass
+`-adminPortEnabled` to serve it on port `9001` (authentication must be
+enabled), and set `-adminAccessKeys <comma-separated-IDs>` to allow existing
+credentials to log in as global administrators. Other admin options:
+`-adminPort`, `-adminBindAddress`, `-adminSecureCookie`,
+`-adminSessionIdleMinutes`, `-adminSessionMaxHours`, and `-adminDatabaseIndex`.
+The allowlist does not change S3 API permissions.
+
 ## `migrate-storage`
 
 Migrates data between two different storage configurations.

@@ -21,10 +21,20 @@ const bindAddressEnvKey = envKeyPrefix + "_BIND_ADDRESS"
 const portEnvKey = envKeyPrefix + "_PORT"
 const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
+const monitoringBindAddressEnvKey = envKeyPrefix + "_MONITORING_BIND_ADDRESS"
+const adminPortEnabledEnvKey = envKeyPrefix + "_ADMIN_PORT_ENABLED"
+const adminPortEnvKey = envKeyPrefix + "_ADMIN_PORT"
+const adminBindAddressEnvKey = envKeyPrefix + "_ADMIN_BIND_ADDRESS"
+const adminSecureCookieEnvKey = envKeyPrefix + "_ADMIN_SECURE_COOKIE"
+const adminSessionIdleMinutesEnvKey = envKeyPrefix + "_ADMIN_SESSION_IDLE_MINUTES"
+const adminSessionMaxHoursEnvKey = envKeyPrefix + "_ADMIN_SESSION_MAX_HOURS"
+const adminDatabaseIndexEnvKey = envKeyPrefix + "_ADMIN_DATABASE_INDEX"
+const adminAccessKeysEnvKey = envKeyPrefix + "_ADMIN_ACCESS_KEYS"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
 const authorizerTypeEnvKey = envKeyPrefix + "_AUTHORIZER_TYPE"
 const authorizerTimeoutMillisecondsEnvKey = envKeyPrefix + "_AUTHORIZER_TIMEOUT_MILLISECONDS"
+const authorizerMaxInstructionsEnvKey = envKeyPrefix + "_AUTHORIZER_MAX_INSTRUCTIONS"
 const policyPathEnvKey = envKeyPrefix + "_POLICY_PATH"
 const policyReloadIntervalSecondsEnvKey = envKeyPrefix + "_POLICY_RELOAD_INTERVAL_SECONDS"
 const spoolDirEnvKey = envKeyPrefix + "_SPOOL_DIR"
@@ -116,10 +126,38 @@ func loadSettingsFromEnv() (*Settings, error) {
 	if err != nil {
 		return nil, err
 	}
+	adminPortEnabled, err := getBoolFromEnv(adminPortEnabledEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminPort, err := getIntFromEnv(adminPortEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminSecureCookie, err := getBoolFromEnv(adminSecureCookieEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminSessionIdleMinutes, err := getIntFromEnv(adminSessionIdleMinutesEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminSessionMaxHours, err := getIntFromEnv(adminSessionMaxHoursEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminDatabaseIndex, err := getIntFromEnv(adminDatabaseIndexEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
 	authorizerType := getStringFromEnv(authorizerTypeEnvKey)
 	authorizerTimeoutMilliseconds, err := getIntFromEnv(authorizerTimeoutMillisecondsEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	authorizerMaxInstructions, err := getIntFromEnv(authorizerMaxInstructionsEnvKey)
 	if err != nil {
 		return nil, err
 	}
@@ -159,10 +197,20 @@ func loadSettingsFromEnv() (*Settings, error) {
 		port:                             port,
 		monitoringPort:                   monitoringPort,
 		monitoringPortEnabled:            monitoringPortEnabled,
+		monitoringBindAddress:            getStringFromEnv(monitoringBindAddressEnvKey),
+		adminPortEnabled:                 adminPortEnabled,
+		adminPort:                        adminPort,
+		adminBindAddress:                 getStringFromEnv(adminBindAddressEnvKey),
+		adminSecureCookie:                adminSecureCookie,
+		adminSessionIdleMinutes:          adminSessionIdleMinutes,
+		adminSessionMaxHours:             adminSessionMaxHours,
+		adminDatabaseIndex:               adminDatabaseIndex,
+		adminAccessKeys:                  getStringSliceFromEnv(adminAccessKeysEnvKey),
 		storageJsonPath:                  storageJsonPath,
 		authorizerPath:                   authorizerPath,
 		authorizerType:                   authorizerType,
 		authorizerTimeoutMilliseconds:    authorizerTimeoutMilliseconds,
+		authorizerMaxInstructions:        authorizerMaxInstructions,
 		policyPath:                       policyPath,
 		policyReloadIntervalSeconds:      policyReloadIntervalSeconds,
 		spoolDir:                         spoolDir,

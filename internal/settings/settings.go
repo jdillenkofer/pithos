@@ -18,10 +18,17 @@ const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
 const defaultMonitoringPort = 9090
 const defaultMonitoringPortEnabled = false
+const defaultAdminPortEnabled = false
+const defaultAdminPort = 9001
+const defaultAdminSecureCookie = true
+const defaultAdminSessionIdleMinutes = 30
+const defaultAdminSessionMaxHours = 12
+const defaultAdminDatabaseIndex = 0
 const defaultStorageJsonPath = "./storage.json"
 const defaultAuthorizerPath = "./authorizer.lua"
 const defaultAuthorizerType = "lua"
 const defaultAuthorizerTimeoutMilliseconds = 250
+const defaultAuthorizerMaxInstructions = 50_000_000
 const defaultPolicyPath = "./policies.json"
 const defaultPolicyReloadIntervalSeconds = 5
 const defaultSpoolDir = ""
@@ -47,10 +54,20 @@ type Settings struct {
 	port                             *int     `mergable:""`
 	monitoringPort                   *int     `mergable:""`
 	monitoringPortEnabled            *bool    `mergable:""`
+	monitoringBindAddress            *string  `mergable:""`
+	adminPortEnabled                 *bool    `mergable:""`
+	adminPort                        *int     `mergable:""`
+	adminBindAddress                 *string  `mergable:""`
+	adminSecureCookie                *bool    `mergable:""`
+	adminSessionIdleMinutes          *int     `mergable:""`
+	adminSessionMaxHours             *int     `mergable:""`
+	adminDatabaseIndex               *int     `mergable:""`
+	adminAccessKeys                  []string `mergable:""`
 	storageJsonPath                  *string  `mergable:""`
 	authorizerPath                   *string  `mergable:""`
 	authorizerType                   *string  `mergable:""`
 	authorizerTimeoutMilliseconds    *int     `mergable:""`
+	authorizerMaxInstructions        *int     `mergable:""`
 	policyPath                       *string  `mergable:""`
 	policyReloadIntervalSeconds      *int     `mergable:""`
 	spoolDir                         *string  `mergable:""`
@@ -118,6 +135,52 @@ func (s *Settings) MonitoringPortEnabled() bool {
 	return valueOrDefault(s.monitoringPortEnabled, defaultMonitoringPortEnabled)
 }
 
+func (s *Settings) MonitoringBindAddress() string {
+	return valueOrDefault(s.monitoringBindAddress, s.BindAddress())
+}
+
+// AdminPortRequested reports whether the admin listener was switched on. The
+// listener is opt-in so upgrades never open a new port.
+func (s *Settings) AdminPortRequested() bool {
+	return valueOrDefault(s.adminPortEnabled, defaultAdminPortEnabled)
+}
+
+// AdminPortEnabled reports whether the admin listener should run. Admin access
+// always requires authentication, even when the listener was switched on.
+func (s *Settings) AdminPortEnabled() bool {
+	return s.AuthenticationEnabled() && s.AdminPortRequested()
+}
+
+func (s *Settings) AdminPort() int {
+	return valueOrDefault(s.adminPort, defaultAdminPort)
+}
+
+func (s *Settings) AdminBindAddress() string {
+	return valueOrDefault(s.adminBindAddress, s.BindAddress())
+}
+
+func (s *Settings) AdminSecureCookie() bool {
+	return valueOrDefault(s.adminSecureCookie, defaultAdminSecureCookie)
+}
+
+func (s *Settings) AdminSessionIdleMinutes() int {
+	return valueOrDefault(s.adminSessionIdleMinutes, defaultAdminSessionIdleMinutes)
+}
+
+func (s *Settings) AdminSessionMaxHours() int {
+	return valueOrDefault(s.adminSessionMaxHours, defaultAdminSessionMaxHours)
+}
+
+func (s *Settings) AdminDatabaseIndex() int {
+	return valueOrDefault(s.adminDatabaseIndex, defaultAdminDatabaseIndex)
+}
+
+// AdminAccessKeys lists credentials granted global admin UI access. It does not
+// change their permissions on the S3 API. An empty allowlist permits no logins.
+func (s *Settings) AdminAccessKeys() []string {
+	return append([]string{}, s.adminAccessKeys...)
+}
+
 func (s *Settings) StorageJsonPath() string {
 	return valueOrDefault(s.storageJsonPath, defaultStorageJsonPath)
 }
@@ -130,6 +193,9 @@ func (s *Settings) AuthorizerType() string {
 }
 func (s *Settings) AuthorizerTimeoutMilliseconds() int {
 	return valueOrDefault(s.authorizerTimeoutMilliseconds, defaultAuthorizerTimeoutMilliseconds)
+}
+func (s *Settings) AuthorizerMaxInstructions() int {
+	return valueOrDefault(s.authorizerMaxInstructions, defaultAuthorizerMaxInstructions)
 }
 func (s *Settings) PolicyPath() string { return valueOrDefault(s.policyPath, defaultPolicyPath) }
 func (s *Settings) PolicyReloadIntervalSeconds() int {

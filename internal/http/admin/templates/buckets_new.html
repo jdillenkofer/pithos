@@ -1,0 +1,26 @@
+{{define "buckets_new"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><span>Create bucket</span></div>
+<div class="page-head"><h1>Create bucket</h1></div>
+<form method="post" action="/buckets/create" class="form-narrow">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<div class="container">
+  <div class="container-head"><h2>General configuration</h2></div>
+  <div class="container-body">
+    <label>Bucket name <input name="bucket" required placeholder="my-bucket"><span class="hint">3–63 characters: lowercase letters, numbers, dots and hyphens.</span></label>
+    <label>Owner account <input name="owner" value="{{.Owner}}" maxlength="256" required><span class="hint">The account that owns the bucket in Pithos's account model.</span></label>
+  </div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Bucket Versioning</h2><p>Versioning keeps multiple variants of an object in the same bucket, so you can preserve, retrieve and restore every version and recover from unintended deletes and overwrites.</p></div></div>
+  <div class="container-body"><fieldset><legend>Bucket Versioning</legend>
+    <label class="check"><input type="radio" name="versioning" value="Disabled" checked> Disable</label>
+    <label class="check"><input type="radio" name="versioning" value="Enabled"> Enable</label>
+  </fieldset></div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Object Lock</h2><p>Store objects using a write-once-read-many (WORM) model. Enabling Object Lock also enables versioning and cannot be undone.</p></div></div>
+  <div class="container-body"><label class="check"><input type="checkbox" name="object_lock" value="true"> Enable Object Lock</label></div>
+</div>
+<div class="actions-row"><a class="button-link" href="/buckets">Cancel</a><button type="submit" class="primary">Create bucket</button></div>
+</form>
+{{end}}

@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"sort"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
@@ -125,5 +126,17 @@ func TestGetObjectAttributesRequiresReadAndAttributesPermissions(t *testing.T) {
 				require.Equal(t, authorization.ImplicitDeny, d.Effect, action)
 			}
 		})
+	}
+}
+
+func TestSupportedOperationsAreEvaluable(t *testing.T) {
+	operations := SupportedOperations()
+	require.True(t, sort.StringsAreSorted(operations))
+	require.Contains(t, operations, authorization.OperationCopyObject)
+	for _, operation := range operations {
+		bucket, key := "bucket", "key"
+		request := &authorization.Request{Operation: operation, Bucket: &bucket, Key: &key, SourceBucket: &bucket, SourceKey: &key}
+		_, err := checksFor(context.Background(), request)
+		require.NoError(t, err, operation)
 	}
 }

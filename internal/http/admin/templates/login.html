@@ -1,0 +1,16 @@
+{{define "login"}}
+<div class="login-card">
+  <div class="brand"><img class="brand-logo" src="/static/logo.svg" alt="" width="34" height="34">Pithos <small>Console</small></div>
+  <h1>Sign in</h1>
+  <p class="subtitle">Use the access key and secret of a credential on the global-admin allowlist.</p>
+  {{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
+  {{if .Disabled}}<p class="alert warn">No administrators are configured. Set the admin access-key allowlist to enable login.</p>{{end}}
+  <form method="post" action="/login">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <label>Access key ID <input name="access_key" value="{{.AccessKey}}" autocomplete="username" maxlength="128" required autofocus></label>
+    <label>Secret access key <input type="password" name="secret_key" autocomplete="current-password" maxlength="256" required></label>
+    <button class="primary" {{if .Disabled}}disabled{{end}}>Sign in</button>
+  </form>
+</div>
+<p class="hint login-foot">Global administrators can manage every account. S3 API permissions are unchanged.</p>
+{{end}}

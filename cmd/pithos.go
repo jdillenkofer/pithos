@@ -23,6 +23,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/buildinfo"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
+	"github.com/jdillenkofer/pithos/internal/http/admin"
 	httpmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
@@ -227,7 +228,8 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	logLevel := settings.LogLevel()
 	logLevelVar.Set(logLevel)
 
-	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath())
+	storageJsonConfig := readStorageConfiguration(settings.StorageJsonPath())
+	dbContainer, store := loadStorageConfigurationFromJson(storageJsonConfig)
 
 	dbs := dbContainer.Dbs()
 
@@ -306,7 +308,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	var httpMonitoringServer *http.Server
 	if settings.MonitoringPortEnabled() {
 		monitoringHandler := server.SetupMonitoringServer(dbs, readiness)
-		monitoringAddr := net.JoinHostPort(settings.BindAddress(), strconv.Itoa(settings.MonitoringPort()))
+		monitoringAddr := net.JoinHostPort(settings.MonitoringBindAddress(), strconv.Itoa(settings.MonitoringPort()))
 		httpMonitoringServer = &http.Server{
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 			Addr:              monitoringAddr,
@@ -319,12 +321,46 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		}
 	}
 
+	var httpAdminServer *http.Server
+	if settings.AdminPortEnabled() {
+		adminContext, stopAdmin := context.WithCancel(ctx)
+		defer stopAdmin()
+		adminHandler, err := admin.NewHandler(admin.Options{
+			Context: adminContext, Settings: settings, Storage: store, StorageConfig: storageJsonConfig, StorageStarted: true,
+			Databases: dbs, CredentialProvider: credentialProvider, Authorizer: requestAuthorizer,
+		})
+		if err != nil {
+			return fmt.Errorf("create admin handler: %w", err)
+		}
+		defer func() {
+			if closer, ok := adminHandler.(io.Closer); ok {
+				if err := closer.Close(); err != nil {
+					slog.Error("Couldn't stop admin workers", "error", err)
+				}
+			}
+		}()
+		httpAdminServer = &http.Server{
+			BaseContext:       func(net.Listener) context.Context { return ctx },
+			Addr:              net.JoinHostPort(settings.AdminBindAddress(), fmt.Sprint(settings.AdminPort())),
+			Handler:           adminHandler,
+			ReadHeaderTimeout: readHeaderTimeout,
+			WriteTimeout:      writeTimeout,
+			IdleTimeout:       idleTimeout,
+			MaxHeaderBytes:    maxHeaderBytes,
+		}
+	} else if settings.AdminPortRequested() {
+		slog.Warn("Admin listener disabled because authentication is disabled")
+	}
+
 	signalCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
 	servers := []*http.Server{httpServer}
 	if httpMonitoringServer != nil {
 		servers = append(servers, httpMonitoringServer)
+	}
+	if httpAdminServer != nil {
+		servers = append(servers, httpAdminServer)
 	}
 	// Bind all listeners before announcing readiness. A failed bind must not
 	// leave a monitoring endpoint reporting a healthy but unavailable S3 API.
@@ -427,15 +463,20 @@ func loadConfiguredRequestAuthorizer(configured *settings.Settings, authenticati
 		return nil, fmt.Errorf("unknown authorizer type %q", configured.AuthorizerType())
 	}
 	// Zero would select the default and negative values are rejected, so
-	// neither can turn the limit off.
+	// neither can turn the limits off.
 	timeoutMilliseconds := configured.AuthorizerTimeoutMilliseconds()
 	if timeoutMilliseconds <= 0 {
 		return nil, fmt.Errorf("authorizer timeout must be a positive number of milliseconds, got %d", timeoutMilliseconds)
+	}
+	maxInstructions := configured.AuthorizerMaxInstructions()
+	if maxInstructions <= 0 {
+		return nil, fmt.Errorf("authorizer instruction limit must be a positive number, got %d", maxInstructions)
 	}
 	return loadRequestAuthorizer(configured.AuthorizerPath(), authenticationEnabled, lua.Options{
 		TrustForwardedHeaders: configured.TrustForwardedHeaders(),
 		TrustedProxyCIDRs:     configured.TrustedProxyCIDRs(),
 		MaxExecutionTime:      time.Duration(timeoutMilliseconds) * time.Millisecond,
+		MaxInstructions:       maxInstructions,
 	})
 }
 
@@ -463,6 +504,22 @@ func validatePolicy(args []string) error {
 }
 
 func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, storage.Storage) {
+	return loadStorageConfigurationFromJson(readStorageConfiguration(storageJsonPath))
+}
+
+// readStorageConfiguration returns the storage configuration at
+// storageJsonPath, or defaultStorageConfig when it cannot be read.
+func readStorageConfiguration(storageJsonPath string) []byte {
+	storageJsonConfig, err := os.ReadFile(storageJsonPath)
+	if err != nil {
+		slog.Warn(fmt.Sprint("Couldn't load storageJson: ", err))
+		slog.Warn("Using defaultStorageConfig as fallback")
+		return []byte(defaultStorageConfig)
+	}
+	return storageJsonConfig
+}
+
+func loadStorageConfigurationFromJson(storageJsonConfig []byte) (*config.DbContainer, storage.Storage) {
 	diContainer, err := dependencyinjection.NewContainer()
 	if err != nil {
 		slog.Error(fmt.Sprint("Error while creating diContainer: ", err))
@@ -475,13 +532,6 @@ func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, stor
 		slog.Error(fmt.Sprint("Error while registering dbContainer in diContainer: ", err))
 		os.Exit(1)
 	}
-	storageJsonConfig, err := os.ReadFile(storageJsonPath)
-	if err != nil {
-		slog.Warn(fmt.Sprint("Couldn't load storageJson: ", err))
-		slog.Warn("Using defaultStorageConfig as fallback")
-		storageJsonConfig = []byte(defaultStorageConfig)
-	}
-
 	storageInstantiator, err := storageConfig.CreateStorageInstantiatorFromJson(storageJsonConfig)
 	if err != nil {
 		slog.Error(fmt.Sprint("Error while creating storageInstantiator from json: ", err))

@@ -1,0 +1,17 @@
+{{define "confirm"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>{{if .Review}}Review rule{{else}}Confirm deletion{{end}}</span></div>
+<div class="page-head"><h1>{{.Title}}</h1></div>
+{{if .Review}}
+<div class="container">
+  <div class="container-head"><div><h2>Rule summary</h2><p>Check the scope and actions before saving.</p></div></div>
+  <div class="container-body"><dl class="lifecycle-summary">{{range .Details}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>{{if .Message}}<p>{{.Message}}</p>{{end}}</div>
+</div>
+{{if .Warning}}<div class="alert warn"><p><strong>Bucket-wide rule.</strong> {{.Warning}}</p></div>{{end}}
+{{else}}<div class="alert warn"><p>{{.Message}}</p></div>{{end}}
+<form method="post" action="{{.Target}}">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <input type="hidden" name="confirm" value="yes">
+  {{range .Fields}}<input type="hidden" name="{{.Label}}" value="{{.Value}}">{{end}}
+  <div class="actions-row start"><a class="button-link" href="{{.CancelURL}}">Cancel</a><button type="submit" class="{{if .Review}}primary{{else}}danger{{end}}">{{.Action}}</button></div>
+</form>
+{{end}}

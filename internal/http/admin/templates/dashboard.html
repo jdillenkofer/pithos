@@ -1,0 +1,48 @@
+{{define "dashboard"}}
+<section hx-get="/" hx-trigger="every 10s" hx-target="#main" hx-swap="innerHTML">
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Dashboard</span></div>
+<div class="page-head"><div><h1>Dashboard</h1><p class="subtitle">Updates every 10 seconds</p></div></div>
+{{if .MetricsError}}<div role="alert"><p>{{.MetricsError}}</p></div>{{end}}
+<div class="container">
+  <div class="container-head"><div><h2>Storage snapshot</h2><p>Current versions of all objects across every account</p></div></div>
+  <div class="container-body">
+    <div class="kv split">
+      <div><div class="label">Total storage</div><div class="big">{{.TotalSize}}</div></div>
+      <div><div class="label">Object count</div><div class="big">{{.Objects}}</div></div>
+      <div><div class="label">Average object size</div><div class="big">{{.AverageSize}}</div></div>
+      <div><div class="label">Buckets</div><div class="big">{{.Buckets}}</div></div>
+    </div>
+    {{if not .Sampled}}<p class="hint">Usage is sampled periodically; the first sample appears shortly after startup.</p>{{end}}
+  </div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Server</h2></div></div>
+  <div class="container-body">
+    <div class="kv">
+      <div><div class="label">Status</div><div class="value">{{if .DatabaseHealthy}}<span class="status ok">Online</span>{{else}}<span class="status bad">Database unavailable</span>{{end}}</div></div>
+      <div><div class="label">Version</div><div class="value mono">{{.Version}}</div></div>
+      <div><div class="label">Uptime</div><div class="value">{{.Uptime}}</div></div>
+      {{range .Storage}}<div><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div></div>{{end}}
+    </div>
+  </div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>S3 API activity</h2><p>Since the previous refresh</p></div></div>
+  <div class="container-body">
+    <div class="kv">
+      <div><div class="label">Requests</div><div class="big">{{.RequestRate}}</div></div>
+      <div><div class="label">Errors (4xx and 5xx)</div><div class="big">{{.ErrorRate}}</div></div>
+      <div><div class="label">Mean latency</div><div class="big">{{.Latency}}</div></div>
+    </div>
+  </div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Largest buckets</h2><p>Top 10 by size</p></div><a class="button-link" href="/buckets">View all buckets</a></div>
+  <div class="container-body">
+    {{if .TopBuckets}}<div class="usage">
+    {{range .TopBuckets}}<a class="key" href="/objects?bucket={{.Name}}">{{.Name}}</a><meter min="0" max="{{$.MaxBytes}}" value="{{.Bytes}}" title="{{.Size}}">{{.Size}}</meter><span class="num">{{.Objects}} objects</span><span class="num">{{.Size}}</span>
+    {{end}}</div>{{else}}<p class="subtitle">No bucket usage sampled yet.</p>{{end}}
+  </div>
+</div>
+</section>
+{{end}}
