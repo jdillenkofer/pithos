@@ -181,3 +181,19 @@ func TestAuthorizerMaxInstructionsSettings(t *testing.T) {
 		assert.Equal(t, 2_000_000, settings.AuthorizerMaxInstructions())
 	})
 }
+
+func TestMonitoringBindAddressInheritance(t *testing.T) {
+	s := &Settings{bindAddress: addrOf("127.0.0.1")}
+	assert.Equal(t, "127.0.0.1", s.MonitoringBindAddress())
+	s.monitoringBindAddress = addrOf("::1")
+	assert.Equal(t, "::1", s.MonitoringBindAddress())
+
+	s, err := loadSettingsFromCmdArgs([]string{"-monitoringBindAddress=127.0.0.2"})
+	assert.NoError(t, err)
+	assert.Equal(t, "127.0.0.2", s.MonitoringBindAddress())
+
+	t.Setenv(monitoringBindAddressEnvKey, "127.0.0.3")
+	s, err = loadSettingsFromEnv()
+	assert.NoError(t, err)
+	assert.Equal(t, "127.0.0.3", s.MonitoringBindAddress())
+}

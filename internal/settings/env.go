@@ -21,6 +21,7 @@ const bindAddressEnvKey = envKeyPrefix + "_BIND_ADDRESS"
 const portEnvKey = envKeyPrefix + "_PORT"
 const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
+const monitoringBindAddressEnvKey = envKeyPrefix + "_MONITORING_BIND_ADDRESS"
 const adminPortEnabledEnvKey = envKeyPrefix + "_ADMIN_PORT_ENABLED"
 const adminPortEnvKey = envKeyPrefix + "_ADMIN_PORT"
 const adminBindAddressEnvKey = envKeyPrefix + "_ADMIN_BIND_ADDRESS"
@@ -196,6 +197,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		port:                             port,
 		monitoringPort:                   monitoringPort,
 		monitoringPortEnabled:            monitoringPortEnabled,
+		monitoringBindAddress:            getStringFromEnv(monitoringBindAddressEnvKey),
 		adminPortEnabled:                 adminPortEnabled,
 		adminPort:                        adminPort,
 		adminBindAddress:                 getStringFromEnv(adminBindAddressEnvKey),

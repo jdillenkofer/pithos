@@ -308,7 +308,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	var httpMonitoringServer *http.Server
 	if settings.MonitoringPortEnabled() {
 		monitoringHandler := server.SetupMonitoringServer(dbs, readiness)
-		monitoringAddr := net.JoinHostPort(settings.BindAddress(), strconv.Itoa(settings.MonitoringPort()))
+		monitoringAddr := net.JoinHostPort(settings.MonitoringBindAddress(), strconv.Itoa(settings.MonitoringPort()))
 		httpMonitoringServer = &http.Server{
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 			Addr:              monitoringAddr,

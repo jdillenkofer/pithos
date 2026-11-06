@@ -170,6 +170,7 @@ by an interrupted process may need to be cleaned up separately.
 |----------|-------------|---------|
 | `PITHOS_MONITORING_PORT` | Port for monitoring endpoints | `9090` |
 | `PITHOS_MONITORING_PORT_ENABLED` | Enable/disable the monitoring port | `false` |
+| `PITHOS_MONITORING_BIND_ADDRESS` | Monitoring listener bind address | Inherits `PITHOS_BIND_ADDRESS` (`0.0.0.0`) |
 | `PITHOS_METRICS_GAUGES_INTERVAL_SECONDS` | Interval in seconds for periodically sampled storage gauges | `30` |
 
 #### Health probes

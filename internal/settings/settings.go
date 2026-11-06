@@ -54,6 +54,7 @@ type Settings struct {
 	port                             *int     `mergable:""`
 	monitoringPort                   *int     `mergable:""`
 	monitoringPortEnabled            *bool    `mergable:""`
+	monitoringBindAddress            *string  `mergable:""`
 	adminPortEnabled                 *bool    `mergable:""`
 	adminPort                        *int     `mergable:""`
 	adminBindAddress                 *string  `mergable:""`
@@ -132,6 +133,10 @@ func (s *Settings) MonitoringPort() int {
 
 func (s *Settings) MonitoringPortEnabled() bool {
 	return valueOrDefault(s.monitoringPortEnabled, defaultMonitoringPortEnabled)
+}
+
+func (s *Settings) MonitoringBindAddress() string {
+	return valueOrDefault(s.monitoringBindAddress, s.BindAddress())
 }
 
 // AdminPortRequested reports whether the admin listener was switched on. The

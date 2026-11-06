@@ -70,6 +70,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	portAccessor := registerIntFlag(serveCommand, "port", defaultPort, "the port for the s3 api")
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
+	monitoringBindAddressAccessor := registerStringFlag(serveCommand, "monitoringBindAddress", "", "the monitoring bind address; defaults to bindAddress")
 	adminPortEnabledAccessor := registerBoolFlag(serveCommand, "adminPortEnabled", defaultAdminPortEnabled, "determines if the admin UI port of pithos is enabled; requires authentication")
 	adminPortAccessor := registerIntFlag(serveCommand, "adminPort", defaultAdminPort, "the port for the admin UI")
 	adminBindAddressAccessor := registerStringFlag(serveCommand, "adminBindAddress", "", "the admin UI bind address; defaults to bindAddress")
@@ -134,6 +135,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		port:                             portAccessor(),
 		monitoringPort:                   monitoringPortAccessor(),
 		monitoringPortEnabled:            monitoringPortEnabledAccessor(),
+		monitoringBindAddress:            monitoringBindAddressAccessor(),
 		adminPortEnabled:                 adminPortEnabledAccessor(),
 		adminPort:                        adminPortAccessor(),
 		adminBindAddress:                 adminBindAddressAccessor(),
