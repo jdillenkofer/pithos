@@ -81,6 +81,45 @@ func TestObjectContinuationIsBoundToListing(t *testing.T) {
 		t.Fatal("unbounded or flat listing")
 	}
 }
+type paginatedVersionStore struct {
+	storage.Storage
+	seen []storage.ListObjectVersionsOptions
+}
+
+func (s *paginatedVersionStore) ListObjectVersions(_ context.Context, _ storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	s.seen = append(s.seen, opts)
+	next := "dir/"
+	return &storage.ListObjectVersionsResult{CommonPrefixes: []string{"dir/"}, NextKeyMarker: &next, IsTruncated: true}, nil
+}
+
+func TestVersionContinuationDropsStaleVersionMarker(t *testing.T) {
+	store := &paginatedVersionStore{}
+	pages, err := template.ParseFS(assets, "templates/*.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{options: Options{Storage: store}, pages: pages}
+	// The previous page ended on a version; this one ends on a common prefix.
+	token, _ := json.Marshal(objectCursor{Bucket: "test-bucket", Versions: true, Key: "a", Version: "v1"})
+	response := httptest.NewRecorder()
+	app.objects(response, httptest.NewRequest("GET", "/objects?bucket=test-bucket&versions=true&continuation-token="+base64.RawURLEncoding.EncodeToString(token), nil))
+	if response.Code != 200 || len(store.seen) != 1 || *store.seen[0].VersionIDMarker != "v1" {
+		t.Fatalf("first page: %d %+v", response.Code, store.seen)
+	}
+	next := regexp.MustCompile(`<a href="([^"]+)">Next page</a>`).FindStringSubmatch(response.Body.String())
+	if len(next) != 2 {
+		t.Fatalf("missing next page: %s", response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	app.objects(response, httptest.NewRequest("GET", html.UnescapeString(next[1]), nil))
+	if response.Code != 200 || len(store.seen) != 2 || store.seen[1].KeyMarker == nil || *store.seen[1].KeyMarker != "dir/" {
+		t.Fatalf("continuation did not resume after prefix: %d %+v", response.Code, store.seen)
+	}
+	if store.seen[1].VersionIDMarker != nil {
+		t.Fatalf("stale version marker %q paired with key marker %q", *store.seen[1].VersionIDMarker, *store.seen[1].KeyMarker)
+	}
+}
+
 func TestObjectErrorsDoNotExposeProviderSecrets(t *testing.T) {
 	app := &App{}
 	response := httptest.NewRecorder()

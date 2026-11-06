@@ -224,11 +224,13 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		for _, o := range result.Versions {
 			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), displayPrefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), ViewURL: listViewURL(bucket.String(), o.Key.String(), o.VersionID, o.IsDeleteMarker), Select: objectRef{Key: o.Key.String(), Version: o.VersionID}.Value(), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
 		}
+		// The markers form a pair: a page ending on a common prefix has no
+		// version marker, and the previous page's must not carry over.
 		if result.NextKeyMarker != nil {
-			cursor.Key = *result.NextKeyMarker
-		}
-		if result.NextVersionIDMarker != nil {
-			cursor.Version = *result.NextVersionIDMarker
+			cursor.Key, cursor.Version = *result.NextKeyMarker, ""
+			if result.NextVersionIDMarker != nil {
+				cursor.Version = *result.NextVersionIDMarker
+			}
 		}
 	} else {
 		opts := storage.ListObjectsOptions{Prefix: &prefix, Delimiter: &delimiter, MaxKeys: 100}
