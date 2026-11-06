@@ -137,6 +137,14 @@ listings compare keys in UTF-8 byte order, independently of the database locale.
 Pithos serves a single region. As in S3, `us-east-1` is reported as an empty
 `LocationConstraint`. The request is authorized as `GetBucketLocation`.
 
+`CreateBucket` accepts an optional `CreateBucketConfiguration` body. A
+`LocationConstraint` must name the configured region (`EU` is accepted for
+`eu-west-1`); any other value fails with `IllegalLocationConstraintException`
+(HTTP 400) and no bucket is created. Malformed XML returns `MalformedXML`.
+Unlike S3's regional endpoints, Pithos also accepts a missing or empty
+constraint, because many clients omit it. Other configuration elements are
+ignored.
+
 ## Expected Bucket Owner
 
 Bucket-scoped operations (except bucket creation) enforce

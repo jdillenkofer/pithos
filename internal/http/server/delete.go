@@ -107,6 +107,7 @@ const maxCompleteMultipartUploadBodySize int64 = 10 * 1024 * 1024
 const maxDeleteObjectsBodySize int64 = 5 * 1024 * 1024
 const maxPutBucketWebsiteBodySize int64 = 128 * 1024
 const maxPutBucketVersioningBodySize int64 = 16 * 1024
+const maxCreateBucketBodySize int64 = 16 * 1024
 const maxPutBucketCORSBodySize int64 = 128 * 1024
 const maxPutObjectTaggingBodySize int64 = 128 * 1024
 

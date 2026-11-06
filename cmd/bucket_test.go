@@ -40,6 +40,30 @@ func TestCreateBucket(t *testing.T) {
 			assert.Equal(t, bucketName, createBucketResult.Location)
 		})
 
+		t.Run("it should create a bucket with the configured location constraint"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket:                    bucketName,
+				CreateBucketConfiguration: &types.CreateBucketConfiguration{LocationConstraint: types.BucketLocationConstraint(region)},
+			})
+			require.NoError(t, err)
+		})
+
+		t.Run("it should reject a location constraint for another region"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket:                    bucketName,
+				CreateBucketConfiguration: &types.CreateBucketConfiguration{LocationConstraint: types.BucketLocationConstraintUsWest2},
+			})
+			var apiErr smithy.APIError
+			require.ErrorAs(t, err, &apiErr)
+			assert.Equal(t, "IllegalLocationConstraintException", apiErr.ErrorCode())
+			_, err = s3Client.HeadBucket(context.Background(), &s3.HeadBucketInput{Bucket: bucketName})
+			assert.Error(t, err, "the bucket must not be created")
+		})
+
 		t.Run("it should not be able to create the same bucket twice"+testSuffix, func(t *testing.T) {
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
