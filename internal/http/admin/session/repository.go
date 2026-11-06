@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"embed"
 	"encoding/hex"
 	"errors"
@@ -28,7 +29,15 @@ type Record struct {
 type Repository struct {
 	db   database.Database
 	idle time.Duration
+	// touchInterval is how stale last_seen_at may become before a request
+	// writes it, so most requests only read. It shortens the idle timeout by
+	// at most this interval.
+	touchInterval time.Duration
 }
+
+// maxTouchInterval bounds touchInterval; short idle timeouts use a tenth of
+// the timeout instead.
+const maxTouchInterval = time.Minute
 
 func NewRepository(ctx context.Context, db database.Database, idle time.Duration) (*Repository, error) {
 	if db == nil || idle <= 0 {
@@ -53,7 +62,7 @@ func NewRepository(ctx context.Context, db database.Database, idle time.Duration
 	if err != nil {
 		return nil, fmt.Errorf("migrate admin sessions: %w", err)
 	}
-	return &Repository{db: db, idle: idle}, nil
+	return &Repository{db: db, idle: idle, touchInterval: min(maxTouchInterval, idle/10)}, nil
 }
 
 func NewToken() (string, error) {
@@ -72,11 +81,26 @@ func (r *Repository) Create(ctx context.Context, record Record) error {
 	})
 }
 
-// GetAndTouch checks both expiry limits and touches only an unexpired session.
-// The conditional UPDATE prevents concurrent requests from reviving an expired session.
+// GetAndTouch checks both expiry limits and touches only an unexpired session
+// whose last_seen_at is older than touchInterval. The conditional UPDATE
+// prevents concurrent requests from reviving an expired session.
 func (r *Repository) GetAndTouch(ctx context.Context, idHash string, now time.Time) (Record, error) {
 	var record Record
-	err := database.WithTx(ctx, r.db, nil, func(ctx context.Context, tx database.Tx) error {
+	err := database.WithTx(ctx, r.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var created, last, expires int64
+		err := tx.SqlTx().QueryRowContext(ctx, `SELECT id_hash,access_key_id,account_id,principal_id,credential_hash,csrf_token,created_at,last_seen_at,expires_at,client_ip,user_agent FROM admin_session WHERE id_hash=$1 AND expires_at>$2 AND last_seen_at>$3`, idHash, now.UnixNano(), now.Add(-r.idle).UnixNano()).Scan(&record.IDHash, &record.AccessKeyID, &record.AccountID, &record.PrincipalID, &record.CredentialHash, &record.CSRFToken, &created, &last, &expires, &record.ClientIP, &record.UserAgent)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrExpired
+		}
+		record.CreatedAt = time.Unix(0, created)
+		record.LastSeenAt = time.Unix(0, last)
+		record.ExpiresAt = time.Unix(0, expires)
+		return err
+	})
+	if err != nil || now.Sub(record.LastSeenAt) < r.touchInterval {
+		return record, err
+	}
+	err = database.WithTx(ctx, r.db, nil, func(ctx context.Context, tx database.Tx) error {
 		result, err := tx.SqlTx().ExecContext(ctx, `UPDATE admin_session SET last_seen_at = CASE WHEN last_seen_at < $1 THEN $1 ELSE last_seen_at END WHERE id_hash=$2 AND expires_at>$1 AND last_seen_at>$3`, now.UnixNano(), idHash, now.Add(-r.idle).UnixNano())
 		if err != nil {
 			return err
@@ -88,14 +112,15 @@ func (r *Repository) GetAndTouch(ctx context.Context, idHash string, now time.Ti
 		if n != 1 {
 			return ErrExpired
 		}
-		var created, last, expires int64
-		err = tx.SqlTx().QueryRowContext(ctx, `SELECT id_hash,access_key_id,account_id,principal_id,credential_hash,csrf_token,created_at,last_seen_at,expires_at,client_ip,user_agent FROM admin_session WHERE id_hash=$1`, idHash).Scan(&record.IDHash, &record.AccessKeyID, &record.AccountID, &record.PrincipalID, &record.CredentialHash, &record.CSRFToken, &created, &last, &expires, &record.ClientIP, &record.UserAgent)
-		record.CreatedAt = time.Unix(0, created)
-		record.LastSeenAt = time.Unix(0, last)
-		record.ExpiresAt = time.Unix(0, expires)
-		return err
+		return nil
 	})
-	return record, err
+	if err != nil {
+		return Record{}, err
+	}
+	if record.LastSeenAt.Before(now) {
+		record.LastSeenAt = now
+	}
+	return record, nil
 }
 func (r *Repository) Delete(ctx context.Context, idHash string) error {
 	return database.WithTx(ctx, r.db, nil, func(ctx context.Context, tx database.Tx) error {

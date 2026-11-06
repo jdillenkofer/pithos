@@ -45,6 +45,10 @@ func TestRepositoryLifetimeAndRevocation(t *testing.T) {
 	if found.AccessKeyID != "key" || found.CredentialHash != "fingerprint" || !found.LastSeenAt.Equal(now.Add(29*time.Minute)) {
 		t.Fatalf("unexpected session: %+v", found)
 	}
+	// A request within the touch interval only reads the session.
+	if found, err = repo.GetAndTouch(ctx, Hash(token), now.Add(29*time.Minute+30*time.Second)); err != nil || !found.LastSeenAt.Equal(now.Add(29*time.Minute)) {
+		t.Fatalf("touched within interval: %+v %v", found, err)
+	}
 	if _, err := repo.GetAndTouch(ctx, Hash(token), now.Add(60*time.Minute)); !errors.Is(err, ErrExpired) {
 		t.Fatalf("idle expiry: %v", err)
 	}
