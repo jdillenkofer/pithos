@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -552,6 +555,10 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.checkCreateBucketLocationConstraint(w, r) {
+		return
+	}
+
 	slog.InfoContext(r.Context(), "Creating bucket", "bucket", bucketName.String())
 	lockEnabled := false
 	if value := getHeaderAsPtr(r.Header, "x-amz-bucket-object-lock-enabled"); value != nil {
@@ -569,6 +576,39 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	responseHeaders := w.Header()
 	responseHeaders.Set(locationHeader, bucketName.String())
 	w.WriteHeader(200)
+}
+
+// checkCreateBucketLocationConstraint validates the optional
+// CreateBucketConfiguration body. Pithos serves a single region, so a
+// LocationConstraint must name the configured one. Unlike S3's regional
+// endpoints, an absent or empty constraint is accepted, because many clients
+// omit it. True means the request failed.
+func (s *Server) checkCreateBucketLocationConstraint(w http.ResponseWriter, r *http.Request) bool {
+	data, err := readLimitedBody(r, w, maxCreateBucketBodySize)
+	if err != nil {
+		handleError(err, w, r)
+		return true
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return false
+	}
+	var configuration CreateBucketConfiguration
+	if err := xml.Unmarshal(data, &configuration); err != nil {
+		handleError(storage.ErrMalformedXML, w, r)
+		return true
+	}
+	constraint := configuration.LocationConstraint
+	if constraint == nil || *constraint == "" || locationConstraintMatchesRegion(*constraint, s.region) {
+		return false
+	}
+	writeS3ErrorResponse(w, r, http.StatusBadRequest, "IllegalLocationConstraintException", fmt.Sprintf("The %s location constraint is incompatible for the region specific endpoint this request was sent to.", *constraint), r.URL.Path)
+	return true
+}
+
+// locationConstraintMatchesRegion also accepts EU, S3's legacy constraint for
+// eu-west-1.
+func locationConstraintMatchesRegion(constraint string, region string) bool {
+	return constraint == region || (constraint == "EU" && region == "eu-west-1")
 }
 
 func (s *Server) routeBucketDeleteHandler(w http.ResponseWriter, r *http.Request) {
