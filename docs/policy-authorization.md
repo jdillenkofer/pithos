@@ -157,6 +157,8 @@ precedence when computing remaining retention days.
 | DeleteBucket | `s3:DeleteBucket` |
 | GetObject, HeadObject | `s3:GetObject` |
 | versioned GetObject/HeadObject | `s3:GetObjectVersion` |
+| GetObjectAttributes | `s3:GetObjectAttributes` and `s3:GetObject` |
+| versioned GetObjectAttributes | `s3:GetObjectVersionAttributes` and `s3:GetObjectVersion` |
 | PutObject, AppendObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload | `s3:PutObject` |
 | DeleteObject / versioned delete | `s3:DeleteObject` / `s3:DeleteObjectVersion` |
 | CopyObject, UploadPartCopy | source `s3:GetObject` (or version) and destination `s3:PutObject` |

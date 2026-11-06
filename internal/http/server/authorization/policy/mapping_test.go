@@ -103,3 +103,27 @@ func TestLockMetadataRequiresPermissionsOnlyOnObjectWrites(t *testing.T) {
 		})
 	}
 }
+
+func TestGetObjectAttributesRequiresReadAndAttributesPermissions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, tc := range []struct {
+		operation, attributesAction, readAction string
+	}{
+		{authorization.OperationGetObjectAttributes, "s3:GetObjectAttributes", "s3:GetObject"},
+		{authorization.OperationGetObjectVersionAttributes, "s3:GetObjectVersionAttributes", "s3:GetObjectVersion"},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
+			r := request(tc.operation, "bucket", "key")
+			both := compileTestPolicy(t, `{"Effect":"Allow","Action":["`+tc.attributesAction+`","`+tc.readAction+`"],"Resource":"arn:aws:s3:::bucket/*"}`)
+			d, err := both.AuthorizeRequest(context.Background(), r)
+			require.NoError(t, err)
+			require.Equal(t, authorization.Allow, d.Effect)
+			for _, action := range []string{tc.attributesAction, tc.readAction} {
+				only := compileTestPolicy(t, `{"Effect":"Allow","Action":"`+action+`","Resource":"arn:aws:s3:::bucket/*"}`)
+				d, err := only.AuthorizeRequest(context.Background(), r)
+				require.NoError(t, err)
+				require.Equal(t, authorization.ImplicitDeny, d.Effect, action)
+			}
+		})
+	}
+}

@@ -84,7 +84,10 @@ type ObjectMetadata = metadatastore.ObjectMetadata
 
 type Object struct {
 	// PartSizes preserves multipart boundaries for synchronous replication.
-	PartSizes         []int64
+	PartSizes []int64
+	// PartChecksums holds each part's checksums, aligned with PartSizes. It is
+	// nil when the backend does not expose per-part checksums.
+	PartChecksums     []ChecksumValues
 	ObjectLock        ObjectLock
 	Key               ObjectKey
 	ContentType       *string

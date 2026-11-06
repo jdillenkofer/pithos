@@ -211,12 +211,45 @@ the caller listing the upload. Uploads created before Pithos stored initiators
 omit the `Initiator` element. `DisplayName` is not populated because it is
 deprecated in S3.
 
+## Object Attributes
+
+`GET /<bucket>/<key>?attributes` implements `GetObjectAttributes`. The
+`x-amz-object-attributes` header selects the returned elements from `ETag`,
+`Checksum`, `ObjectParts`, `StorageClass`, and `ObjectSize`, as a
+comma-separated list or repeated header. A missing, empty, or unknown attribute
+name returns `InvalidArgument` (HTTP 400).
+
+- `ETag` is returned without the surrounding quotes of the `ETag` header.
+- `Checksum` contains the same checksums as `HeadObject` plus `ChecksumType`.
+  Composite checksums omit the `-<part count>` suffix, as in S3.
+- `ObjectParts` is returned only for multipart objects, including objects built
+  by `AppendObject`. Each `Part` carries its number, size, and the part
+  checksums for the algorithms the object checksum reports. `x-amz-max-parts`
+  (0 to 1,000, default 1,000) and `x-amz-part-number-marker` (0 to 10,000)
+  page through the parts; malformed or out-of-range values return
+  `InvalidArgument`. S3-backed storage reports only `PartsCount`.
+- `StorageClass` is always present when requested, including `STANDARD`.
+
+`If-Match` and `If-None-Match` are evaluated against the selected object
+version, as for `HeadObject`. A failed `If-Match` returns HTTP 412; a matching
+`If-None-Match` returns HTTP 304 without a response body.
+
+The response carries `Last-Modified` and, for versioned objects,
+`x-amz-version-id`. A current delete marker returns `NoSuchKey` (HTTP 404) and
+an explicitly selected delete marker returns `MethodNotAllowed` (HTTP 405), both
+with `x-amz-delete-marker: true`.
+
+The request is authorized as `GetObjectAttributes`, or as
+`GetObjectVersionAttributes` with a `versionId`. JSON policies must allow both
+the attributes action and the matching read action, as in S3.
+
 ## Authorization Operations
 
 Versioned requests use distinct Lua authorizer operation names:
 
 - `HeadObjectVersion`
 - `GetObjectVersion`
+- `GetObjectVersionAttributes`
 - `DeleteObjectVersion`
 - `GetBucketVersioning`
 - `PutBucketVersioning`
