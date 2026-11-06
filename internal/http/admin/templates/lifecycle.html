@@ -41,6 +41,7 @@
 <form method="post" action="/buckets/configure">
 {{template "bucket_form_fields" .}}
 <input type="hidden" name="tab" value="lifecycle"><input type="hidden" name="editor" value="form">
+<input type="hidden" name="lifecycle_hash" value="{{.LifecycleHash}}">
 <input type="hidden" name="original_id" value="{{.LifecycleRule.OriginalID}}">
 <input type="hidden" name="original_index" value="{{.LifecycleRule.OriginalIndex}}">
 <div class="container lifecycle-editor" id="lifecycle-rule">

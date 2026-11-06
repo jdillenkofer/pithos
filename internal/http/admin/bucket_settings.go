@@ -123,13 +123,17 @@ func mustMarshal(config any) (string, string, error) {
 // lifecycleFromForm adds, replaces or deletes one rule of the current
 // lifecycle configuration.
 func lifecycleFromForm(ctx context.Context, st storage.Storage, name storage.BucketName, form url.Values) (string, string, error) {
-	var rules []storage.LifecycleRule
 	current, err := st.GetBucketLifecycleConfiguration(ctx, name)
-	if err == nil && current != nil {
-		rules = current.Rules
-	} else if err != nil && !errors.Is(err, storage.ErrNoSuchLifecycleConfiguration) {
+	if err != nil && !errors.Is(err, storage.ErrNoSuchLifecycleConfiguration) {
 		return "", "", err
 	}
+	if current == nil {
+		current = &storage.BucketLifecycleConfiguration{}
+	}
+	if form.Get("lifecycle_hash") != policyHash([]byte(configurationText(current))) {
+		return "", "", errors.New("lifecycle rules changed; reload the page before saving")
+	}
+	rules := current.Rules
 	original := form.Get("original_id")
 	kept := rules[:0:0]
 	for i, rule := range rules {

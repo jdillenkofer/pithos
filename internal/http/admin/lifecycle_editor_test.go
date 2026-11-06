@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +55,7 @@ func TestAdvancedLifecycleFormAndPrefill(t *testing.T) {
 	other.ID = &otherID
 	s.lifecycle = &storage.BucketLifecycleConfiguration{Rules: []storage.LifecycleRule{other, rule}}
 	fields.Set("original_id", "archive")
+	fields.Set("lifecycle_hash", currentLifecycleHash(a))
 	w = structuredBucketRequest(a, "lifecycle", fields)
 	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
 	updated := s.last.(*storage.BucketLifecycleConfiguration)
@@ -146,4 +148,25 @@ func TestLifecycleTransitionOnlyAndCleanupForms(t *testing.T) {
 		require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
 		require.Nil(t, storage.ValidateBucketLifecycleConfiguration(s.last.(*storage.BucketLifecycleConfiguration)))
 	}
+}
+
+func TestLifecycleEditorRejectsStalePage(t *testing.T) {
+	ruleA := storage.LifecycleRule{ID: ptrutils.ToPtr("a"), Status: "Enabled", Expiration: &storage.LifecycleExpiration{Days: ptrutils.ToPtr(int32(1))}}
+	ruleB := storage.LifecycleRule{ID: ptrutils.ToPtr("b"), Status: "Enabled", Expiration: &storage.LifecycleExpiration{Days: ptrutils.ToPtr(int32(2))}}
+	ruleC := storage.LifecycleRule{ID: ptrutils.ToPtr("c"), Status: "Enabled", Expiration: &storage.LifecycleExpiration{Days: ptrutils.ToPtr(int32(3))}}
+	s := &bucketTestStorage{buckets: []storage.Bucket{{Name: storage.MustNewBucketName("valid-bucket")}}, lifecycle: &storage.BucketLifecycleConfiguration{Rules: []storage.LifecycleRule{ruleA, ruleB}}}
+	a := bucketTestApp(t, s)
+	hash := currentLifecycleHash(a)
+	for _, path := range []string{"/buckets/detail?bucket=valid-bucket&tab=lifecycle", "/buckets/detail?bucket=valid-bucket&tab=lifecycle&rule_index=0"} {
+		page := bucketRequest(a, "GET", path, nil)
+		require.Equal(t, http.StatusOK, page.Code)
+		require.Contains(t, page.Body.String(), `name="lifecycle_hash" value="`+hash+`"`, path)
+	}
+
+	// An S3 client prepends a rule after the page was loaded.
+	s.lifecycle = &storage.BucketLifecycleConfiguration{Rules: []storage.LifecycleRule{ruleC, ruleA, ruleB}}
+	w := structuredBucketRequest(a, "lifecycle", url.Values{"rule_action": {"delete"}, "original_id": {"a"}, "original_index": {"0"}, "lifecycle_hash": {hash}})
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "reload the page")
+	require.Zero(t, s.writes)
 }

@@ -421,7 +421,19 @@ func structuredBucketRequest(a *App, tab string, form url.Values) *httptest.Resp
 	form.Set("tab", tab)
 	form.Set("editor", "form")
 	form.Set("confirm", "yes")
+	if tab == "lifecycle" && !form.Has("lifecycle_hash") {
+		form.Set("lifecycle_hash", currentLifecycleHash(a))
+	}
 	return bucketRequest(a, "POST", "/buckets/configure", form)
+}
+
+// currentLifecycleHash returns the snapshot hash a freshly loaded page would carry.
+func currentLifecycleHash(a *App) string {
+	config, _ := a.options.Storage.GetBucketLifecycleConfiguration(context.Background(), storage.MustNewBucketName("valid-bucket"))
+	if config == nil {
+		config = &storage.BucketLifecycleConfiguration{}
+	}
+	return policyHash([]byte(configurationText(config)))
 }
 
 func TestStructuredBucketEditors(t *testing.T) {
@@ -554,7 +566,7 @@ func TestBucketConfigurationDeletesRequireConfirmation(t *testing.T) {
 		{"tab": {"lifecycle"}, "action": {"delete"}},
 		{"tab": {"tags"}, "editor": {"form"}},
 		{"tab": {"website"}, "editor": {"form"}, "website": {"disabled"}},
-		{"tab": {"lifecycle"}, "editor": {"form"}, "rule_action": {"delete"}, "original_id": {"keep"}},
+		{"tab": {"lifecycle"}, "editor": {"form"}, "rule_action": {"delete"}, "original_id": {"keep"}, "lifecycle_hash": {currentLifecycleHash(a)}},
 	} {
 		form.Set("bucket", "valid-bucket")
 		w := bucketRequest(a, "POST", "/buckets/configure", form)
@@ -592,7 +604,7 @@ func TestLifecycleSaveRequiresReview(t *testing.T) {
 		t.Run(prefix, func(t *testing.T) {
 			s := &bucketTestStorage{}
 			a := bucketTestApp(t, s)
-			form := url.Values{"bucket": {"valid-bucket"}, "tab": {"lifecycle"}, "editor": {"form"}, "rule_id": {"cleanup"}, "status": {"Enabled"}, "prefix": {prefix}, "expire_days": {"30"}, "noncurrent_days": {"7"}}
+			form := url.Values{"bucket": {"valid-bucket"}, "tab": {"lifecycle"}, "editor": {"form"}, "rule_id": {"cleanup"}, "status": {"Enabled"}, "prefix": {prefix}, "expire_days": {"30"}, "noncurrent_days": {"7"}, "lifecycle_hash": {currentLifecycleHash(a)}}
 			page := bucketRequest(a, "POST", "/buckets/configure", form)
 			require.Equal(t, http.StatusOK, page.Code, page.Body.String())
 			require.Zero(t, s.writes, "review must not mutate storage")

@@ -75,6 +75,7 @@ type bucketDetailPage struct {
 	CORSEditor      bool
 	Lifecycle       []lifecycleView
 	LifecycleRule   lifecycleFormView
+	LifecycleHash   string
 	LifecycleEditor bool
 }
 
@@ -399,6 +400,10 @@ func (a *App) bucketDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		lifecycleConfig, _ := lifecycle.(*storage.BucketLifecycleConfiguration)
+		if lifecycleConfig == nil {
+			lifecycleConfig = &storage.BucketLifecycleConfiguration{}
+		}
+		page.LifecycleHash = policyHash([]byte(configurationText(lifecycleConfig)))
 		page.Lifecycle = describeLifecycle(name.String(), lifecycleConfig)
 		page.LifecycleRule = lifecycleRuleForm(lifecycleConfig, r.URL.Query().Get("rule"))
 		page.LifecycleEditor = r.URL.Query().Get("editor") == "create" || r.URL.Query().Has("rule") || r.URL.Query().Has("rule_index")
