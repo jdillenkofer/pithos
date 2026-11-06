@@ -82,6 +82,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer script")
 	authorizerTypeAccessor := registerStringFlag(serveCommand, "authorizerType", defaultAuthorizerType, "authorizer backend: lua or policy")
 	authorizerTimeoutMillisecondsAccessor := registerIntFlag(serveCommand, "authorizerTimeoutMilliseconds", defaultAuthorizerTimeoutMilliseconds, "maximum execution time of one Lua authorizer evaluation in milliseconds")
+	authorizerMaxInstructionsAccessor := registerIntFlag(serveCommand, "authorizerMaxInstructions", defaultAuthorizerMaxInstructions, "maximum Lua VM instructions of one Lua authorizer evaluation")
 	policyPathAccessor := registerStringFlag(serveCommand, "policyPath", defaultPolicyPath, "path to the policy JSON file")
 	policyReloadIntervalSecondsAccessor := registerIntFlag(serveCommand, "policyReloadIntervalSeconds", defaultPolicyReloadIntervalSeconds, "interval between policy reloads; zero disables reload")
 	spoolDirAccessor := registerStringFlag(serveCommand, "spoolDir", defaultSpoolDir, "the directory for temporary spool files")
@@ -145,6 +146,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		authorizerPath:                   authorizerPathAccessor(),
 		authorizerType:                   authorizerTypeAccessor(),
 		authorizerTimeoutMilliseconds:    authorizerTimeoutMillisecondsAccessor(),
+		authorizerMaxInstructions:        authorizerMaxInstructionsAccessor(),
 		policyPath:                       policyPathAccessor(),
 		policyReloadIntervalSeconds:      policyReloadIntervalSecondsAccessor(),
 		spoolDir:                         spoolDirAccessor(),

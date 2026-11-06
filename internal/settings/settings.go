@@ -28,6 +28,7 @@ const defaultStorageJsonPath = "./storage.json"
 const defaultAuthorizerPath = "./authorizer.lua"
 const defaultAuthorizerType = "lua"
 const defaultAuthorizerTimeoutMilliseconds = 250
+const defaultAuthorizerMaxInstructions = 50_000_000
 const defaultPolicyPath = "./policies.json"
 const defaultPolicyReloadIntervalSeconds = 5
 const defaultSpoolDir = ""
@@ -65,6 +66,7 @@ type Settings struct {
 	authorizerPath                   *string  `mergable:""`
 	authorizerType                   *string  `mergable:""`
 	authorizerTimeoutMilliseconds    *int     `mergable:""`
+	authorizerMaxInstructions        *int     `mergable:""`
 	policyPath                       *string  `mergable:""`
 	policyReloadIntervalSeconds      *int     `mergable:""`
 	spoolDir                         *string  `mergable:""`
@@ -180,6 +182,9 @@ func (s *Settings) AuthorizerType() string {
 }
 func (s *Settings) AuthorizerTimeoutMilliseconds() int {
 	return valueOrDefault(s.authorizerTimeoutMilliseconds, defaultAuthorizerTimeoutMilliseconds)
+}
+func (s *Settings) AuthorizerMaxInstructions() int {
+	return valueOrDefault(s.authorizerMaxInstructions, defaultAuthorizerMaxInstructions)
 }
 func (s *Settings) PolicyPath() string { return valueOrDefault(s.policyPath, defaultPolicyPath) }
 func (s *Settings) PolicyReloadIntervalSeconds() int {

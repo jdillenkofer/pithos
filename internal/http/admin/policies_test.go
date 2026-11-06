@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	policylua "github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
@@ -26,11 +27,11 @@ const testPolicy = `{"schemaVersion":1,"policies":{"read":{"Version":"2012-10-17
 
 func TestPolicyValidationAndSimulation(t *testing.T) {
 	for _, candidate := range []string{`{}`, strings.Replace(testPolicy, `"schemaVersion":1`, `"schemaVersion":2`, 1), strings.Replace(testPolicy, `"Effect":"Allow"`, `"Effect":"Unknown"`, 1), strings.Repeat("x", policySizeLimit+1)} {
-		if _, err := validatePolicyCandidate("policy", []byte(candidate)); err == nil {
+		if _, err := validatePolicyCandidate("policy", []byte(candidate), nil); err == nil {
 			t.Fatal("invalid candidate accepted")
 		}
 	}
-	evaluator, err := validatePolicyCandidate("policy", []byte(testPolicy))
+	evaluator, err := validatePolicyCandidate("policy", []byte(testPolicy), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +57,11 @@ func TestPolicyValidationAndSimulation(t *testing.T) {
 
 func TestLuaPolicyValidationAndSimulation(t *testing.T) {
 	for _, code := range []string{`not lua`, `function authorizeRequest(r) return "yes" end`, `while true do end`, `function authorizeRequest(r) while true do end end`, `function authorizeRequest(r) pcall(function() while true do end end) return true end`} {
-		if _, err := validatePolicyCandidate("lua", []byte(code)); err == nil {
+		if _, err := validatePolicyCandidate("lua", []byte(code), nil); err == nil {
 			t.Fatalf("accepted invalid/unbounded code: %s", code)
 		}
 	}
-	evaluator, err := validatePolicyCandidate("lua", []byte(`function authorizeRequest(r) return r:principalIdEquals("reader") and r:isOperation("GetObject") and r:bucketEquals("demo") and r:keyHasPrefix("public/") end`))
+	evaluator, err := validatePolicyCandidate("lua", []byte(`function authorizeRequest(r) return r:principalIdEquals("reader") and r:isOperation("GetObject") and r:bucketEquals("demo") and r:keyHasPrefix("public/") end`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,12 +72,35 @@ func TestLuaPolicyValidationAndSimulation(t *testing.T) {
 		}
 	}
 	// A branch not exercised by constructor dry-run must still be bounded.
-	evaluator, err = validatePolicyCandidate("lua", []byte(`function authorizeRequest(r) if r:bucketEquals("loop") then while true do end end return true end`))
+	evaluator, err = validatePolicyCandidate("lua", []byte(`function authorizeRequest(r) if r:bucketEquals("loop") then while true do end end return true end`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = simulate(context.Background(), "lua", evaluator, simulationInput{Operation: "GetObject", Bucket: "loop"}, ownedBy("account")); err == nil {
 		t.Fatal("unbounded simulator")
+	}
+}
+
+func TestLuaCandidateInheritsRunningLimits(t *testing.T) {
+	running, err := policylua.NewLuaAuthorizerWithOptions(`function authorizeRequest(r) return true end`, policylua.Options{MaxExecutionTime: time.Minute, MaxInstructions: 100_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	heavy := []byte(`local t = {} for i = 1, 600000 do t[i] = i end function authorizeRequest(r) return true end`)
+	if _, err = validatePolicyCandidate("lua", heavy, running); err == nil || !strings.Contains(err.Error(), "instruction limit") {
+		t.Fatalf("validation ignored the running instruction limit: %v", err)
+	}
+	// The default instruction limit admits the policy; a generous time limit
+	// keeps the result independent of runner speed.
+	generous, err := policylua.NewLuaAuthorizerWithOptions(`function authorizeRequest(r) return true end`, policylua.Options{MaxExecutionTime: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = validatePolicyCandidate("lua", heavy, generous); err != nil {
+		t.Fatalf("running limits rejected policy: %v", err)
+	}
+	if _, err = validatePolicyCandidate("lua", []byte(`function authorizeRequest(r) return true end`), nil); err != nil {
+		t.Fatalf("default limits rejected policy: %v", err)
 	}
 }
 
@@ -96,7 +120,7 @@ func TestPolicySaveBackupConflictAndValidation(t *testing.T) {
 		}
 		return nil
 	}
-	backup, err := savePolicyCandidate(path, "policy", policyHash(old), candidate, reload)
+	backup, err := savePolicyCandidate(path, "policy", policyHash(old), candidate, nil, reload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,10 +137,10 @@ func TestPolicySaveBackupConflictAndValidation(t *testing.T) {
 			}
 		}
 	}
-	if _, err = savePolicyCandidate(path, "policy", policyHash(old), old, reload); !errors.Is(err, errPolicyConflict) {
+	if _, err = savePolicyCandidate(path, "policy", policyHash(old), old, nil, reload); !errors.Is(err, errPolicyConflict) {
 		t.Fatalf("expected conflict: %v", err)
 	}
-	if _, err = savePolicyCandidate(path, "policy", policyHash(candidate), []byte(`{}`), reload); err == nil {
+	if _, err = savePolicyCandidate(path, "policy", policyHash(candidate), []byte(`{}`), nil, reload); err == nil {
 		t.Fatal("saved invalid policy")
 	}
 	if calls != 1 {
@@ -136,7 +160,7 @@ func TestPolicyReloadFailureRestoresFileAndRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	backup, err := savePolicyCandidate(path, "lua", policyHash(old), candidate, func(data []byte) error {
+	backup, err := savePolicyCandidate(path, "lua", policyHash(old), candidate, nil, func(data []byte) error {
 		calls++
 		if bytes.Equal(data, candidate) {
 			return errors.New("reload unavailable")
@@ -167,7 +191,7 @@ func TestPolicyConcurrentSave(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := savePolicyCandidate(path, "policy", policyHash(old), append(append([]byte{}, old...), '\n'), func([]byte) error { return nil })
+			_, err := savePolicyCandidate(path, "policy", policyHash(old), append(append([]byte{}, old...), '\n'), nil, func([]byte) error { return nil })
 			results <- err
 		}()
 	}
@@ -323,7 +347,7 @@ func ownedBy(owner string) bucketOwnerFunc {
 }
 
 func TestSimulatorAppliesAccountBoundaryAndContext(t *testing.T) {
-	evaluator, err := validatePolicyCandidate("policy", []byte(`{"schemaVersion":1,"policies":{"all":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*","Resource":["arn:aws:s3:::*","arn:aws:s3:::*/*"],"Condition":{"StringEquals":{"aws:ResourceAccount":"owner","s3:authType":"REST-HEADER"}}}}},"bindings":[{"policy":"all","subjects":[{"type":"principal","accountId":"owner","principalId":"p"},{"type":"principal","accountId":"other","principalId":"p"}]}]}`))
+	evaluator, err := validatePolicyCandidate("policy", []byte(`{"schemaVersion":1,"policies":{"all":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*","Resource":["arn:aws:s3:::*","arn:aws:s3:::*/*"],"Condition":{"StringEquals":{"aws:ResourceAccount":"owner","s3:authType":"REST-HEADER"}}}}},"bindings":[{"policy":"all","subjects":[{"type":"principal","accountId":"owner","principalId":"p"},{"type":"principal","accountId":"other","principalId":"p"}]}]}`), nil)
 	require.NoError(t, err)
 	ctx := context.Background()
 

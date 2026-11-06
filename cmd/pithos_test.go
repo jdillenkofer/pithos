@@ -149,6 +149,27 @@ func TestLoadConfiguredRequestAuthorizerTimeout(t *testing.T) {
 		})
 	}
 
+	for _, limit := range []string{"0", "-1"} {
+		t.Run("rejects instruction limit "+limit, func(t *testing.T) {
+			configured, err := settings.LoadSettings([]string{"-authorizerPath", path, "-authorizerMaxInstructions", limit})
+			require.NoError(t, err)
+			_, err = loadConfiguredRequestAuthorizer(configured, true)
+			require.ErrorContains(t, err, "authorizer instruction limit must be a positive number")
+		})
+	}
+
+	t.Run("applies the configured instruction limit", func(t *testing.T) {
+		configured, err := settings.LoadSettings([]string{"-authorizerPath", path, "-authorizerTimeoutMilliseconds", "60000", "-authorizerMaxInstructions", "100000"})
+		require.NoError(t, err)
+		authorizer, err := loadConfiguredRequestAuthorizer(configured, true)
+		require.NoError(t, err)
+		started := time.Now()
+		decision, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{Bucket: aws.String("spin")})
+		require.ErrorContains(t, err, "instruction limit")
+		assert.NotEqual(t, authorization.Allow, decision.Effect)
+		assert.Less(t, time.Since(started), lua.DefaultMaxExecutionTime)
+	})
+
 	t.Run("applies the configured limit", func(t *testing.T) {
 		configured, err := settings.LoadSettings([]string{"-authorizerPath", path, "-authorizerTimeoutMilliseconds", "20"})
 		require.NoError(t, err)

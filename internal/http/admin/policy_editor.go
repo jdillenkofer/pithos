@@ -614,7 +614,7 @@ func (a *App) editPolicies(w http.ResponseWriter, r *http.Request) {
 		candidate, err = policies.marshal()
 	}
 	if err == nil {
-		_, err = validatePolicyCandidate("policy", candidate)
+		_, err = validatePolicyCandidate("policy", candidate, nil)
 	}
 	if err != nil {
 		a.audit(r, "AdminPolicyValidationFailed")

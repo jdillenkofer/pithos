@@ -33,6 +33,7 @@ const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
 const authorizerTypeEnvKey = envKeyPrefix + "_AUTHORIZER_TYPE"
 const authorizerTimeoutMillisecondsEnvKey = envKeyPrefix + "_AUTHORIZER_TIMEOUT_MILLISECONDS"
+const authorizerMaxInstructionsEnvKey = envKeyPrefix + "_AUTHORIZER_MAX_INSTRUCTIONS"
 const policyPathEnvKey = envKeyPrefix + "_POLICY_PATH"
 const policyReloadIntervalSecondsEnvKey = envKeyPrefix + "_POLICY_RELOAD_INTERVAL_SECONDS"
 const spoolDirEnvKey = envKeyPrefix + "_SPOOL_DIR"
@@ -155,6 +156,10 @@ func loadSettingsFromEnv() (*Settings, error) {
 	if err != nil {
 		return nil, err
 	}
+	authorizerMaxInstructions, err := getIntFromEnv(authorizerMaxInstructionsEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	policyPath := getStringFromEnv(policyPathEnvKey)
 	policyReloadIntervalSeconds, err := getIntFromEnv(policyReloadIntervalSecondsEnvKey)
 	if err != nil {
@@ -203,6 +208,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		authorizerPath:                   authorizerPath,
 		authorizerType:                   authorizerType,
 		authorizerTimeoutMilliseconds:    authorizerTimeoutMilliseconds,
+		authorizerMaxInstructions:        authorizerMaxInstructions,
 		policyPath:                       policyPath,
 		policyReloadIntervalSeconds:      policyReloadIntervalSeconds,
 		spoolDir:                         spoolDir,

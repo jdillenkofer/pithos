@@ -89,7 +89,7 @@ func (a *App) policies(w http.ResponseWriter, r *http.Request) {
 	page.Candidate, page.Hash = r.PostForm.Get("candidate"), r.PostForm.Get("hash")
 	page.Simulation = simulationInputFrom(r.PostForm)
 	candidate := []byte(page.Candidate)
-	evaluator, err := validatePolicyCandidate(kind, candidate)
+	evaluator, err := validatePolicyCandidate(kind, candidate, a.options.Authorizer)
 	if err != nil {
 		page.Notice = &policyNotice{"bad", "The policy is invalid: " + err.Error()}
 		a.audit(r, "AdminPolicyValidationFailed")
@@ -128,7 +128,7 @@ func (a *App) savePolicy(w http.ResponseWriter, r *http.Request, kind, path, has
 		a.fail(w, r, 503, "Active authorizer does not support immediate reload; no changes saved")
 		return "", false
 	}
-	backup, err := savePolicyCandidate(path, kind, hash, candidate, reload)
+	backup, err := savePolicyCandidate(path, kind, hash, candidate, a.options.Authorizer, reload)
 	if errors.Is(err, errPolicyConflict) {
 		a.audit(r, "AdminSavePolicyConflict")
 		a.fail(w, r, 409, err.Error())
@@ -177,7 +177,8 @@ func (a *App) policyReloader(kind string) (func([]byte) error, bool) {
 }
 
 // Compile is the same strict JSON validation path used by validate-policy.
-func validatePolicyCandidate(kind string, data []byte) (authorization.RequestAuthorizer, error) {
+// Lua candidates inherit the limits of the running Lua authorizer, if any.
+func validatePolicyCandidate(kind string, data []byte, current authorization.RequestAuthorizer) (authorization.RequestAuthorizer, error) {
 	if len(data) > policySizeLimit {
 		return nil, fmt.Errorf("policy exceeds 1 MiB")
 	}
@@ -187,7 +188,10 @@ func validatePolicyCandidate(kind string, data []byte) (authorization.RequestAut
 	if kind != "lua" {
 		return nil, fmt.Errorf("unsupported policy format")
 	}
-	return policylua.NewSimulator(string(data))
+	if running, ok := current.(*policylua.LuaAuthorizer); ok {
+		return running.Candidate(string(data))
+	}
+	return policylua.NewLuaAuthorizer(string(data))
 }
 
 func policyHash(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }
@@ -222,7 +226,7 @@ func readPolicyFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-func savePolicyCandidate(path, kind, expectedHash string, candidate []byte, reload func([]byte) error) (string, error) {
+func savePolicyCandidate(path, kind, expectedHash string, candidate []byte, current authorization.RequestAuthorizer, reload func([]byte) error) (string, error) {
 	policiesWriter.Lock()
 	defer policiesWriter.Unlock()
 	// Reject symlinks: replacing the link would edit a different file than the
@@ -241,7 +245,7 @@ func savePolicyCandidate(path, kind, expectedHash string, candidate []byte, relo
 	if expectedHash == "" || expectedHash != policyHash(old) {
 		return "", errPolicyConflict
 	}
-	if _, err = validatePolicyCandidate(kind, candidate); err != nil {
+	if _, err = validatePolicyCandidate(kind, candidate, current); err != nil {
 		return "", fmt.Errorf("validate candidate: %w", err)
 	}
 	backup, err := durablePolicyTemp(path, ".bak-"+time.Now().UTC().Format("20060102T150405.000000000Z")+"-*", old)

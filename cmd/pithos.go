@@ -463,15 +463,20 @@ func loadConfiguredRequestAuthorizer(configured *settings.Settings, authenticati
 		return nil, fmt.Errorf("unknown authorizer type %q", configured.AuthorizerType())
 	}
 	// Zero would select the default and negative values are rejected, so
-	// neither can turn the limit off.
+	// neither can turn the limits off.
 	timeoutMilliseconds := configured.AuthorizerTimeoutMilliseconds()
 	if timeoutMilliseconds <= 0 {
 		return nil, fmt.Errorf("authorizer timeout must be a positive number of milliseconds, got %d", timeoutMilliseconds)
+	}
+	maxInstructions := configured.AuthorizerMaxInstructions()
+	if maxInstructions <= 0 {
+		return nil, fmt.Errorf("authorizer instruction limit must be a positive number, got %d", maxInstructions)
 	}
 	return loadRequestAuthorizer(configured.AuthorizerPath(), authenticationEnabled, lua.Options{
 		TrustForwardedHeaders: configured.TrustForwardedHeaders(),
 		TrustedProxyCIDRs:     configured.TrustedProxyCIDRs(),
 		MaxExecutionTime:      time.Duration(timeoutMilliseconds) * time.Millisecond,
+		MaxInstructions:       maxInstructions,
 	})
 }
 

@@ -26,14 +26,14 @@ var errAuthorizationFunctionNotFound = errors.New("authorization function " + au
 var errAuthorizationResultNotBoolean = errors.New("authorization function " + authorizationFunctionName + " must return a boolean")
 
 type LuaAuthorizer struct {
-	codeMu  sync.RWMutex
-	bounded bool
-	code    string
+	codeMu sync.RWMutex
+	code   string
 	// chunk is the policy code precompiled to a Lua binary chunk. Loading it
 	// skips lexing and parsing the source on every request; the chunk keeps
 	// the source name and debug info, so runtime errors read the same.
 	chunk            []byte
 	maxExecutionTime time.Duration
+	maxInstructions  int
 	proxyResolver    *authorization.ProxyResolver
 	tracer           trace.Tracer
 }
@@ -44,6 +44,9 @@ type Options struct {
 	// MaxExecutionTime bounds a single policy evaluation. Zero selects
 	// DefaultMaxExecutionTime.
 	MaxExecutionTime time.Duration
+	// MaxInstructions bounds the Lua VM instructions of a single policy
+	// evaluation. Zero selects DefaultMaxInstructions.
+	MaxInstructions int
 }
 
 func (authorizer *LuaAuthorizer) dryRun() error {
@@ -71,6 +74,13 @@ func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, 
 	if maxExecutionTime == 0 {
 		maxExecutionTime = DefaultMaxExecutionTime
 	}
+	maxInstructions := options.MaxInstructions
+	if maxInstructions < 0 {
+		return nil, fmt.Errorf("lua authorizer instruction limit must be positive, got %d", maxInstructions)
+	}
+	if maxInstructions == 0 {
+		maxInstructions = DefaultMaxInstructions
+	}
 	proxyResolver, err := authorization.NewProxyResolver(authorization.ProxyOptions{
 		TrustForwardedHeaders: options.TrustForwardedHeaders,
 		TrustedProxyCIDRs:     options.TrustedProxyCIDRs,
@@ -78,6 +88,10 @@ func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, 
 	if err != nil {
 		return nil, err
 	}
+	return newLuaAuthorizer(code, maxExecutionTime, maxInstructions, proxyResolver)
+}
+
+func newLuaAuthorizer(code string, maxExecutionTime time.Duration, maxInstructions int, proxyResolver *authorization.ProxyResolver) (*LuaAuthorizer, error) {
 	chunk, err := compileChunk(code)
 	if err != nil {
 		return nil, err
@@ -86,13 +100,11 @@ func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, 
 		code:             code,
 		chunk:            chunk,
 		maxExecutionTime: maxExecutionTime,
+		maxInstructions:  maxInstructions,
 		proxyResolver:    proxyResolver,
 		tracer:           otel.Tracer("internal/http/server/authorization/lua"),
 	}
-	luaAuthorizer.bounded = true
-	err = luaAuthorizer.dryRun()
-	luaAuthorizer.bounded = false
-	if err != nil {
+	if err = luaAuthorizer.dryRun(); err != nil {
 		return nil, err
 	}
 	return luaAuthorizer, nil
@@ -133,39 +145,30 @@ const deadlineCheckInstructions = 1000
 
 var errExecutionTimeLimitExceeded = errors.New("authorization script exceeded execution time limit")
 
-// boundedInstructionChecks is the simulator's instruction budget, counted in
-// deadline checks: one million VM instructions.
-const boundedInstructionChecks = 1_000_000 / deadlineCheckInstructions
+// DefaultMaxInstructions bounds the Lua VM instructions of a single policy
+// evaluation. It lies above what DefaultMaxExecutionTime allows on typical
+// hardware, so the time limit usually triggers first; the instruction limit
+// keeps the bound deterministic across hardware and load.
+const DefaultMaxInstructions = 50_000_000
 
-// instructionBudget is the simulator's remaining instruction budget.
-type instructionBudget struct {
-	remaining int
-	exhausted bool
-}
+var errInstructionLimitExceeded = errors.New("authorization script exceeded instruction limit")
 
-// setExecutionDeadline aborts the script once the deadline passes or ctx is
-// canceled. After the first abort the hook fires on every instruction, so a
-// script that catches the error with pcall is aborted again by the first
-// instruction it runs outside the protected call.
-//
-// A non-nil budget additionally enforces the simulator's instruction limit.
-// go-lua shares one debug hook per state, so both limits live in it.
-func setExecutionDeadline(ctx context.Context, L *lua.State, deadline time.Time, budget *instructionBudget) {
+// setExecutionLimits aborts the script once the deadline passes, ctx is
+// canceled or it has run maxInstructions instructions. After the first abort
+// the hook fires on every instruction, so a script that catches the error with
+// pcall is aborted again by the first instruction it runs outside the
+// protected call.
+func setExecutionLimits(ctx context.Context, L *lua.State, deadline time.Time, maxInstructions int) {
+	remaining := maxInstructions
 	var hook lua.Hook
 	hook = func(L *lua.State, _ lua.Debug) {
-		if budget != nil {
-			budget.remaining--
-			if budget.remaining <= 0 {
-				budget.exhausted = true
-				// go-lua catches error panics for Lua pcall. A non-error
-				// sentinel escapes that boundary; the outer defer maps it
-				// (including go-lua's type assertion panic) to our error.
-				panic(struct{}{})
-			}
-		}
+		remaining -= deadlineCheckInstructions
 		err := ctx.Err()
 		if err == nil && time.Now().After(deadline) {
 			err = errExecutionTimeLimitExceeded
+		}
+		if err == nil && remaining < 0 {
+			err = errInstructionLimitExceeded
 		}
 		if err != nil {
 			lua.SetDebugHook(L, hook, lua.MaskCount, 1)
@@ -405,25 +408,10 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *
 	return authorization.Decision{Effect: effect}, err
 }
 
-func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, functionName string, request *authorization.Request, args ...interface{}) (effect authorization.Effect, resultErr error) {
+func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, functionName string, request *authorization.Request, args ...interface{}) (authorization.Effect, error) {
 	authorizer.codeMu.RLock()
-	code, chunk, bounded := authorizer.code, authorizer.chunk, authorizer.bounded
+	code, chunk := authorizer.code, authorizer.chunk
 	authorizer.codeMu.RUnlock()
-	// Keep instruction-budget state off the unbounded S3 hot path. A captured
-	// boolean would otherwise escape and allocate on every S3 authorization.
-	var budget *instructionBudget
-	if bounded {
-		budget = &instructionBudget{remaining: boundedInstructionChecks}
-	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if budget != nil && budget.exhausted {
-				effect, resultErr = authorization.ImplicitDeny, errExecutionLimit
-			} else {
-				panic(recovered)
-			}
-		}
-	}()
 	_, span := authorizer.tracer.Start(ctx, "LuaAuthorizer.AuthorizeRequest")
 	defer span.End()
 
@@ -439,7 +427,7 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	L.Pop(1)
 	removeUnsafeBaseFunctions(L)
 	L.Register("xpcall", deferredHandlerXPCall)
-	setExecutionDeadline(ctx, L, time.Now().Add(authorizer.maxExecutionTime), budget)
+	setExecutionLimits(ctx, L, time.Now().Add(authorizer.maxExecutionTime), authorizer.maxInstructions)
 	err := L.Load(bytes.NewReader(chunk), code, "b")
 	if err == nil {
 		err = L.ProtectedCall(0, lua.MultipleReturns, 0)
@@ -473,7 +461,7 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 		return authorization.ImplicitDeny, errAuthorizationResultNotBoolean
 	}
 	allowed := L.ToBoolean(-1)
-	effect = authorization.ExplicitDeny
+	effect := authorization.ExplicitDeny
 	if allowed {
 		effect = authorization.Allow
 	}

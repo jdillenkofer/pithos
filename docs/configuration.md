@@ -34,6 +34,7 @@ falling back to its default. Empty values are treated as unset. For example,
 | `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
 | `PITHOS_AUTHORIZER_TYPE` | Authorization backend: `lua` or `policy` | `lua` |
 | `PITHOS_AUTHORIZER_TIMEOUT_MILLISECONDS` | Maximum Lua execution time per authorization; must be positive | `250` |
+| `PITHOS_AUTHORIZER_MAX_INSTRUCTIONS` | Maximum Lua VM instructions per authorization; must be positive | `50000000` |
 | `PITHOS_POLICY_PATH` | Path to the policy JSON file in policy mode | `./policies.json` |
 | `PITHOS_POLICY_RELOAD_INTERVAL_SECONDS` | Policy refresh interval; `0` loads only at startup | `5` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
@@ -47,7 +48,7 @@ The provider settings may also be set with the `-credentialsProvider`,
 The credential values themselves are never accepted as arguments.
 
 Authorization settings have matching `-authorizerType`, `-authorizerPath`,
-`-authorizerTimeoutMilliseconds`, `-policyPath`, and
+`-authorizerTimeoutMilliseconds`, `-authorizerMaxInstructions`, `-policyPath`, and
 `-policyReloadIntervalSeconds` flags. See
 [Policy Authorization](policy-authorization.md) for the supported language and
 operation matrix.
@@ -315,11 +316,14 @@ and the base functions `dofile`, `loadfile`, and `load` are removed, so a
 script cannot read files or compile code at runtime.
 
 Each evaluation, including the script's top-level code, is limited to 250 ms
-of Lua execution (`PITHOS_AUTHORIZER_TIMEOUT_MILLISECONDS`) and is also
-aborted when the client disconnects. The limit cannot be disabled: `0` and
-negative values fail startup. An aborted
+of Lua execution (`PITHOS_AUTHORIZER_TIMEOUT_MILLISECONDS`) and to 50 million
+Lua VM instructions (`PITHOS_AUTHORIZER_MAX_INSTRUCTIONS`), and is also
+aborted when the client disconnects. The time limit usually triggers first;
+the instruction limit keeps the bound independent of hardware and load, and
+the admin console's policy validation and simulation apply the same limits.
+Neither limit can be disabled: `0` and negative values fail startup. An aborted
 script denies the request, even if it catches the error with `pcall` or
-`xpcall`; a script whose top-level code exceeds the limit fails startup. Time
+`xpcall`; a script whose top-level code exceeds either limit fails startup. Time
 spent inside a single library call (for example one `string.rep` or pattern
 match) is not interrupted, so keep inputs to such calls bounded. `xpcall`
 message handlers run after the failed call has unwound rather than at the

@@ -122,6 +122,33 @@ func TestNegativeExecutionTimeLimitIsRejected(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestConfiguredInstructionLimit(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	loops := map[string]string{
+		"plain loop":      `while true do end`,
+		"pcall swallowed": `while true do pcall(function() while true do end end) end`,
+	}
+	for name, loop := range loops {
+		t.Run(name, func(t *testing.T) {
+			authorizer, err := NewLuaAuthorizerWithOptions(spinPolicy(loop), Options{MaxExecutionTime: time.Minute, MaxInstructions: 100_000})
+			assert.Nil(t, err)
+			started := time.Now()
+			decision, err := authorizer.AuthorizeRequest(context.Background(), spinRequest())
+			assert.ErrorContains(t, err, errInstructionLimitExceeded.Error())
+			assert.NotEqual(t, authorization.Allow, decision.Effect)
+			assert.Less(t, time.Since(started), DefaultMaxExecutionTime)
+		})
+	}
+}
+
+func TestNegativeInstructionLimitIsRejected(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	_, err := NewLuaAuthorizerWithOptions(`function authorizeRequest(request) return true end`, Options{MaxInstructions: -1})
+	assert.Error(t, err)
+}
+
 func TestRunawayTopLevelScriptFailsAtStartup(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

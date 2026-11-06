@@ -1,25 +1,16 @@
 package lua
 
-import "errors"
-
-var errExecutionLimit = errors.New("Lua policy execution limit exceeded")
-
-// NewSimulator uses the production compiler, libraries and request evaluator,
-// with a one-million VM instruction limit for both initialization and calls.
-// The limit is deliberately not a Lua error: policy pcall cannot swallow it.
-func NewSimulator(code string) (*LuaAuthorizer, error) {
-	a, err := NewLuaAuthorizer(code)
-	if err != nil {
-		return nil, err
-	}
-	a.bounded = true
-	return a, nil
+// Candidate compiles and dry-runs code with the same limits and proxy settings
+// as this authorizer, without publishing it. Validating and simulating a policy
+// with the candidate therefore matches what requests would see after a reload.
+func (a *LuaAuthorizer) Candidate(code string) (*LuaAuthorizer, error) {
+	return newLuaAuthorizer(code, a.maxExecutionTime, a.maxInstructions, a.proxyResolver)
 }
 
 // ReloadCode validates before atomically publishing code to subsequent requests.
 // Existing requests retain their original immutable chunk and proxy settings.
 func (a *LuaAuthorizer) ReloadCode(code string) error {
-	candidate, err := NewSimulator(code)
+	candidate, err := a.Candidate(code)
 	if err != nil {
 		return err
 	}

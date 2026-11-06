@@ -161,3 +161,23 @@ func TestAuthorizerTimeoutSettings(t *testing.T) {
 		assert.Equal(t, 50, settings.AuthorizerTimeoutMilliseconds())
 	})
 }
+
+func TestAuthorizerMaxInstructionsSettings(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		settings := &Settings{}
+		assert.Equal(t, 50_000_000, settings.AuthorizerMaxInstructions())
+	})
+
+	t.Run("environment", func(t *testing.T) {
+		t.Setenv(authorizerMaxInstructionsEnvKey, "1000000")
+		settings, err := loadSettingsFromEnv()
+		assert.NoError(t, err)
+		assert.Equal(t, 1_000_000, settings.AuthorizerMaxInstructions())
+	})
+
+	t.Run("arguments", func(t *testing.T) {
+		settings, err := loadSettingsFromCmdArgs([]string{"-authorizerMaxInstructions", "2000000"})
+		assert.NoError(t, err)
+		assert.Equal(t, 2_000_000, settings.AuthorizerMaxInstructions())
+	})
+}
