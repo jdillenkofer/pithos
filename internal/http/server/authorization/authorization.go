@@ -36,6 +36,7 @@ const (
 
 	OperationListBuckets                = "ListBuckets"
 	OperationHeadBucket                 = "HeadBucket"
+	OperationGetBucketLocation          = "GetBucketLocation"
 	OperationListMultipartUploads       = "ListMultipartUploads"
 	OperationListObjects                = "ListObjects"
 	OperationCreateBucket               = "CreateBucket"

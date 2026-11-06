@@ -151,6 +151,7 @@ precedence when computing remaining retention days.
 | ListBuckets | `s3:ListAllMyBuckets` |
 | CreateBucket | `s3:CreateBucket` |
 | HeadBucket, ListObjects | `s3:ListBucket` |
+| GetBucketLocation | `s3:GetBucketLocation` |
 | ListObjectVersions | `s3:ListBucketVersions` |
 | ListMultipartUploads | `s3:ListBucketMultipartUploads` |
 | DeleteBucket | `s3:DeleteBucket` |

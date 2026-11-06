@@ -13,6 +13,7 @@ import (
 	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"net"
 	"net/http"
 	"testing"
@@ -91,6 +92,40 @@ func TestHeadBucket(t *testing.T) {
 				assert.Fail(t, "HeadBucket failed", "err %v", err)
 			}
 			assert.NotNil(t, headBucketResult)
+		})
+	})
+}
+
+func TestGetBucketLocation(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		t.Run("it should return the configured region"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+
+			result, err := s3Client.GetBucketLocation(context.Background(), &s3.GetBucketLocationInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, types.BucketLocationConstraint(region), result.LocationConstraint)
+		})
+
+		t.Run("it should fail for a missing bucket"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.GetBucketLocation(context.Background(), &s3.GetBucketLocationInput{
+				Bucket: bucketName,
+			})
+			var apiErr smithy.APIError
+			require.ErrorAs(t, err, &apiErr)
+			assert.Equal(t, "NoSuchBucket", apiErr.ErrorCode())
 		})
 	})
 }
