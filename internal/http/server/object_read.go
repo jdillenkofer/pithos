@@ -103,6 +103,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	responseSize := object.Size
+	partNumber := 0
 	if raw := r.URL.Query().Get("partNumber"); raw != "" {
 		number, err := strconv.Atoi(raw)
 		sizes := object.PartSizes
@@ -116,11 +117,16 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		responseSize = sizes[number-1]
 		if strings.Contains(object.ETag, "-") {
 			w.Header().Set("x-amz-mp-parts-count", strconv.Itoa(len(sizes)))
+			partNumber = number
 		}
 	}
 	responseHeaders := w.Header()
 	setETagHeaderFromObject(responseHeaders, object)
-	setChecksumHeadersFromObject(responseHeaders, object)
+	if partNumber > 0 {
+		setPartChecksumHeaders(responseHeaders, object, partNumber)
+	} else {
+		setChecksumHeadersFromObject(responseHeaders, object)
+	}
 	if object.VersionID != nil {
 		responseHeaders.Set(versionIDHeader, *object.VersionID)
 	}
@@ -575,10 +581,12 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			readers[i] = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObjectRange", reader)
 		}
 	} else {
-		// Part responses do not have persisted per-part checksums; the full-object
-		// checksum must not be advertised for a partial payload.
+		// The full-object checksum must not be advertised for a single part of
+		// a multipart object.
 		if partNumber == 0 || !multipartObject {
 			setChecksumHeadersFromObject(responseHeaders, object)
+		} else {
+			setPartChecksumHeaders(responseHeaders, object, partNumber)
 		}
 		// Wrap the single reader with tracing
 		readers[0] = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObject", readers[0])

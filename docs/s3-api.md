@@ -267,6 +267,12 @@ Lock also enables versioning permanently. Protected version deletes return
 lock metadata. HEAD with `partNumber` reports the selected part's size and, for
 multipart objects, `x-amz-mp-parts-count`.
 
+GET and HEAD with `partNumber` on a multipart object return the selected part's
+own checksums instead of the full-object checksum, limited to the algorithms
+the object reports, so SDKs can validate part downloads. S3-backed storage does
+not expose part checksums; such responses carry no checksum headers. Single-part
+objects keep returning the full-object checksum for `partNumber=1`.
+
 See [Object Lock](object-lock.md) for XML/header semantics, checksum requirements,
 Lua permissions, governance bypass, multipart behavior and replication.
 
