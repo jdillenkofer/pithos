@@ -147,6 +147,44 @@ type PartResult struct {
 	Size              int64   `xml:"Size"`
 }
 
+type GetObjectAttributesResponse struct {
+	XMLName      xml.Name                  `xml:"GetObjectAttributesResponse"`
+	Xmlns        string                    `xml:"xmlns,attr,omitempty"`
+	ETag         *string                   `xml:"ETag"`
+	Checksum     *ObjectAttributesChecksum `xml:"Checksum"`
+	ObjectParts  *ObjectAttributesParts    `xml:"ObjectParts"`
+	StorageClass *string                   `xml:"StorageClass"`
+	ObjectSize   *int64                    `xml:"ObjectSize"`
+}
+
+type ObjectAttributesChecksum struct {
+	ChecksumCRC32     *string `xml:"ChecksumCRC32"`
+	ChecksumCRC32C    *string `xml:"ChecksumCRC32C"`
+	ChecksumCRC64NVME *string `xml:"ChecksumCRC64NVME"`
+	ChecksumSHA1      *string `xml:"ChecksumSHA1"`
+	ChecksumSHA256    *string `xml:"ChecksumSHA256"`
+	ChecksumType      *string `xml:"ChecksumType"`
+}
+
+type ObjectAttributesParts struct {
+	IsTruncated          *bool                   `xml:"IsTruncated"`
+	MaxParts             *int32                  `xml:"MaxParts"`
+	NextPartNumberMarker *int32                  `xml:"NextPartNumberMarker"`
+	PartNumberMarker     *int32                  `xml:"PartNumberMarker"`
+	Parts                []*ObjectAttributesPart `xml:"Part"`
+	PartsCount           int32                   `xml:"PartsCount"`
+}
+
+type ObjectAttributesPart struct {
+	ChecksumCRC32     *string `xml:"ChecksumCRC32"`
+	ChecksumCRC32C    *string `xml:"ChecksumCRC32C"`
+	ChecksumCRC64NVME *string `xml:"ChecksumCRC64NVME"`
+	ChecksumSHA1      *string `xml:"ChecksumSHA1"`
+	ChecksumSHA256    *string `xml:"ChecksumSHA256"`
+	PartNumber        int32   `xml:"PartNumber"`
+	Size              int64   `xml:"Size"`
+}
+
 type ListPartsResult struct {
 	XMLName              xml.Name        `xml:"ListPartsResult"`
 	Bucket               string          `xml:"Bucket"`

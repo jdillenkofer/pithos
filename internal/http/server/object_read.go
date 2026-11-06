@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -226,7 +227,7 @@ func parseRangeHeader(rangeHeader string) ([]storage.ByteRange, error) {
 }
 
 func hasUnsupportedObjectSubresource(query url.Values) bool {
-	for _, name := range []string{"acl", "attributes", "restore", "select", "torrent"} {
+	for _, name := range []string{"acl", attributesQuery, "restore", "select", "torrent"} {
 		if query.Has(name) {
 			return true
 		}
@@ -236,6 +237,18 @@ func hasUnsupportedObjectSubresource(query url.Values) bool {
 
 func (s *Server) getObjectOrListPartsHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has(attributesQuery) {
+		// GetObjectAttributes is only supported as GET and is not combined
+		// with any other subresource.
+		withoutAttributes := maps.Clone(query)
+		withoutAttributes.Del(attributesQuery)
+		if hasUnsupportedObjectSubresource(withoutAttributes) {
+			writeNotImplemented(w, r, "Object subresource is not supported")
+			return
+		}
+		s.getObjectAttributesHandler(w, r)
+		return
+	}
 	if hasUnsupportedObjectSubresource(query) {
 		writeNotImplemented(w, r, "Object subresource is not supported")
 		return

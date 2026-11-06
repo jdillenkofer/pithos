@@ -17,10 +17,19 @@ import (
 
 func convertObject(mObject metadatastore.Object) storage.Object {
 	sizes := make([]int64, len(mObject.Parts))
+	checksums := make([]storage.ChecksumValues, len(mObject.Parts))
 	for i, part := range mObject.Parts {
 		sizes[i] = part.Size
+		checksums[i] = storage.ChecksumValues{
+			ChecksumCRC32:     part.ChecksumCRC32,
+			ChecksumCRC32C:    part.ChecksumCRC32C,
+			ChecksumCRC64NVME: part.ChecksumCRC64NVME,
+			ChecksumSHA1:      part.ChecksumSHA1,
+			ChecksumSHA256:    part.ChecksumSHA256,
+		}
 	}
 	return storage.Object{PartSizes: sizes,
+		PartChecksums:     checksums,
 		Key:               mObject.Key,
 		ContentType:       mObject.ContentType,
 		LastModified:      mObject.LastModified,

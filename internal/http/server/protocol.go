@@ -633,6 +633,7 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 	// set their source version separately in authorizeCopyRequest.
 	switch operation {
 	case authorization.OperationGetObjectVersion, authorization.OperationHeadObjectVersion,
+		authorization.OperationGetObjectVersionAttributes,
 		authorization.OperationDeleteObjectVersion, authorization.OperationGetObjectVersionTagging,
 		authorization.OperationPutObjectVersionTagging, authorization.OperationDeleteObjectVersionTagging,
 		authorization.OperationGetObjectRetention, authorization.OperationPutObjectRetention,

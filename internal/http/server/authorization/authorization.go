@@ -46,6 +46,8 @@ const (
 	OperationListParts                  = "ListParts"
 	OperationGetObject                  = "GetObject"
 	OperationGetObjectVersion           = "GetObjectVersion"
+	OperationGetObjectAttributes        = "GetObjectAttributes"
+	OperationGetObjectVersionAttributes = "GetObjectVersionAttributes"
 	OperationCreateMultipartUpload      = "CreateMultipartUpload"
 	OperationCompleteMultipartUpload    = "CompleteMultipartUpload"
 	OperationUploadPart                 = "UploadPart"

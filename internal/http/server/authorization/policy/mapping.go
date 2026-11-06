@@ -19,6 +19,7 @@ var operationActions = map[string]string{
 	authorization.OperationDeleteBucket: "s3:DeleteBucket", authorization.OperationGetObject: "s3:GetObject",
 	authorization.OperationHeadObject: "s3:GetObject", authorization.OperationGetObjectVersion: "s3:GetObjectVersion",
 	authorization.OperationHeadObjectVersion: "s3:GetObjectVersion", authorization.OperationPutObject: "s3:PutObject",
+	authorization.OperationGetObjectAttributes: "s3:GetObjectAttributes", authorization.OperationGetObjectVersionAttributes: "s3:GetObjectVersionAttributes",
 	authorization.OperationAppendObject: "s3:PutObject", authorization.OperationCreateMultipartUpload: "s3:PutObject",
 	authorization.OperationUploadPart: "s3:PutObject", authorization.OperationCompleteMultipartUpload: "s3:PutObject",
 	authorization.OperationAbortMultipartUpload: "s3:AbortMultipartUpload", authorization.OperationListParts: "s3:ListMultipartUploadParts",
@@ -74,6 +75,14 @@ func checksFor(ctx context.Context, r *authorization.Request) ([]check, error) {
 		return nil, fmt.Errorf("unsupported operation %q", r.Operation)
 	}
 	checks := []check{{action, resource, false}}
+	// S3 requires read access to the object in addition to the attributes
+	// permission.
+	switch r.Operation {
+	case authorization.OperationGetObjectAttributes:
+		checks = append(checks, check{"s3:GetObject", resource, false})
+	case authorization.OperationGetObjectVersionAttributes:
+		checks = append(checks, check{"s3:GetObjectVersion", resource, false})
+	}
 	if len(r.RequestObjectTags) > 0 && (r.Operation == authorization.OperationPutObject || r.Operation == authorization.OperationCreateMultipartUpload) {
 		checks = append(checks, check{"s3:PutObjectTagging", resource, false})
 	}
