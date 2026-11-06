@@ -137,6 +137,10 @@ listings compare keys in UTF-8 byte order, independently of the database locale.
 Pithos serves a single region. As in S3, `us-east-1` is reported as an empty
 `LocationConstraint`. The request is authorized as `GetBucketLocation`.
 
+`HeadBucket` reports the same region in the `x-amz-bucket-region` header on
+successful responses only. Unlike S3, denied (`403`) and missing (`404`)
+responses omit it, so callers without access learn nothing about the bucket.
+
 `CreateBucket` accepts an optional `CreateBucketConfiguration` body. A
 `LocationConstraint` must name the configured region (`EU` is accepted for
 `eu-west-1`); any other value fails with `IllegalLocationConstraintException`

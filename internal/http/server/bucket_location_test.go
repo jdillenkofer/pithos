@@ -71,3 +71,29 @@ func TestBucketLocationOnlySupportsGet(t *testing.T) {
 		})
 	}
 }
+
+func TestHeadBucketReportsRegion(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		owners     map[string]string
+		allowed    bool
+		wantCode   int
+		wantRegion string
+	}{
+		{"existing bucket", map[string]string{"bucket": "account"}, true, http.StatusOK, "eu-central-1"},
+		{"denied", map[string]string{"bucket": "account"}, false, http.StatusForbidden, ""},
+		{"denied missing bucket", map[string]string{}, false, http.StatusForbidden, ""},
+		{"missing bucket", map[string]string{}, true, http.StatusNotFound, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &accountStorage{owners: tc.owners}
+			handler := SetupServer(nil, "eu-central-1", "s3.test", "website.test", &captureAuthorizer{allowed: tc.allowed}, store)
+			for _, target := range []string{"http://s3.test/bucket", "http://s3.test/bucket/", "http://bucket.s3.test/"} {
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, httptest.NewRequest(http.MethodHead, target, nil))
+				require.Equal(t, tc.wantCode, w.Code, target)
+				require.Equal(t, tc.wantRegion, w.Header().Get(bucketRegionHeader), target)
+			}
+		})
+	}
+}
