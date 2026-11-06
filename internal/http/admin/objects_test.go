@@ -81,6 +81,7 @@ func TestObjectContinuationIsBoundToListing(t *testing.T) {
 		t.Fatal("unbounded or flat listing")
 	}
 }
+
 type paginatedVersionStore struct {
 	storage.Storage
 	seen []storage.ListObjectVersionsOptions

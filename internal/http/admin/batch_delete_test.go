@@ -14,6 +14,7 @@ type batchDeleteStore struct {
 	storage.Storage
 	deleted []objectRef
 	bypass  bool
+	calls   int
 }
 
 func (s *batchDeleteStore) DeleteObject(_ context.Context, _ storage.BucketName, k storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
@@ -27,6 +28,26 @@ func (s *batchDeleteStore) DeleteObject(_ context.Context, _ storage.BucketName,
 	s.deleted = append(s.deleted, ref)
 	s.bypass = s.bypass || opts.BypassGovernanceRetention
 	return &storage.DeleteObjectResult{}, nil
+}
+
+func (s *batchDeleteStore) DeleteObjects(ctx context.Context, b storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
+	s.calls++
+	return deleteEach(ctx, b, entries, s.DeleteObject), nil
+}
+
+// deleteEach emulates a backend's DeleteObjects with single deletes, reporting
+// entries in reverse order to exercise matching by key and version.
+func deleteEach(ctx context.Context, b storage.BucketName, entries []storage.DeleteObjectsInputEntry, deleteObject func(context.Context, storage.BucketName, storage.ObjectKey, *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error)) *storage.DeleteObjectsResult {
+	result := &storage.DeleteObjectsResult{}
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		row := storage.DeleteObjectsEntry{Key: entry.Key, VersionID: entry.VersionID, Deleted: true}
+		if _, err := deleteObject(ctx, b, entry.Key, &storage.DeleteObjectOptions{VersionID: entry.VersionID, BypassGovernanceRetention: entry.BypassGovernanceRetention}); err != nil {
+			row.Deleted, row.ErrCode, row.ErrMsg = false, "AccessDenied", err.Error()
+		}
+		result.Entries = append(result.Entries, row)
+	}
+	return result
 }
 
 func TestBatchObjectDeletion(t *testing.T) {
@@ -45,7 +66,8 @@ func TestBatchObjectDeletion(t *testing.T) {
 	form.Set("confirm_text", "delete")
 	result := versionsTestRequest(t, store, http.MethodPost, "/objects/delete-objects", form)
 	require.Equal(t, http.StatusOK, result.Code, result.Body.String())
-	require.Equal(t, []objectRef{a, b}, store.deleted)
+	require.ElementsMatch(t, []objectRef{a, b}, store.deleted)
+	require.Equal(t, 1, store.calls, "one DeleteObjects call per request")
 	require.False(t, store.bypass)
 	require.Contains(t, result.Body.String(), "Successfully deleted 2 of 3 objects.")
 	require.Contains(t, result.Body.String(), "Object retention or legal hold prevents this operation")

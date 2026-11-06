@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -117,28 +118,68 @@ func (a *App) deleteObjects(w http.ResponseWriter, r *http.Request) {
 	// Only allowlisted global admins reach this route, including the explicit
 	// governance bypass capability. Compliance retention is never bypassed.
 	bypass := r.PostForm.Get("bypass_governance") == "yes"
-	for _, object := range objects {
-		result := deleteObjectResult{objectRef: object}
-		opts := &storage.DeleteObjectOptions{BypassGovernanceRetention: bypass}
-		if object.Version != "" {
-			version := object.Version
-			opts.VersionID = &version
-		}
-		_, err := a.options.Storage.DeleteObject(r.Context(), bucket, storage.MustNewObjectKey(object.Key), opts)
-		if err != nil {
-			_, result.Error = objectErrorMessage(err)
-		} else {
+	failures := a.deleteSelected(r.Context(), bucket, objects, bypass)
+	for i, object := range objects {
+		view.Results = append(view.Results, deleteObjectResult{objectRef: object, Error: failures[i]})
+		if failures[i] == "" {
 			view.Deleted++
-			if object.Version != "" {
-				a.audit(r, "AdminDeleteObjectVersion")
-			} else {
-				a.audit(r, "AdminDeleteObject")
-			}
 		}
-		view.Results = append(view.Results, result)
 	}
+	a.audit(r, "AdminDeleteObjects")
 	if bypass {
 		a.audit(r, "AdminBypassGovernanceRetention")
 	}
 	a.render(w, r, "Delete objects", "delete-objects", view)
+}
+
+// deleteErrorCodes maps per-entry DeleteObjects error codes to the storage
+// errors objectErrorMessage describes.
+var deleteErrorCodes = map[string]error{
+	"AccessDenied":       storage.ErrObjectLockAccessDenied,
+	"NoSuchBucket":       storage.ErrNoSuchBucket,
+	"NoSuchKey":          storage.ErrNoSuchKey,
+	"NotImplemented":     storage.ErrNotImplemented,
+	"PreconditionFailed": storage.ErrPreconditionFailed,
+}
+
+// deleteSelected deletes objects in one DeleteObjects call and returns, per
+// object, an empty string or the reason it was not deleted. Backends may
+// report entries in any order, so results are matched by key and version.
+func (a *App) deleteSelected(ctx context.Context, bucket storage.BucketName, objects []objectRef, bypass bool) []string {
+	failures := make([]string, len(objects))
+	entries := make([]storage.DeleteObjectsInputEntry, len(objects))
+	for i, object := range objects {
+		entries[i] = storage.DeleteObjectsInputEntry{Key: storage.MustNewObjectKey(object.Key), BypassGovernanceRetention: bypass}
+		if object.Version != "" {
+			version := object.Version
+			entries[i].VersionID = &version
+		}
+	}
+	result, err := a.options.Storage.DeleteObjects(ctx, bucket, entries)
+	if err != nil {
+		_, message := objectErrorMessage(err)
+		for i := range failures {
+			failures[i] = message
+		}
+		return failures
+	}
+	matched := make([]bool, len(objects))
+	for _, entry := range result.Entries {
+		for i, object := range objects {
+			if matched[i] || object.Key != entry.Key.String() || (object.Version != "" && entry.VersionID != nil && *entry.VersionID != object.Version) {
+				continue
+			}
+			matched[i] = true
+			if !entry.Deleted {
+				_, failures[i] = objectErrorMessage(deleteErrorCodes[entry.ErrCode])
+			}
+			break
+		}
+	}
+	for i := range objects {
+		if !matched[i] {
+			_, failures[i] = objectErrorMessage(nil)
+		}
+	}
+	return failures
 }

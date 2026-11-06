@@ -39,6 +39,10 @@ func (s *versionsTestStore) DeleteObject(_ context.Context, _ storage.BucketName
 	return &storage.DeleteObjectResult{}, nil
 }
 
+func (s *versionsTestStore) DeleteObjects(ctx context.Context, b storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
+	return deleteEach(ctx, b, entries, s.DeleteObject), nil
+}
+
 func versionsTestRequest(t *testing.T, store storage.Storage, method, target string, form url.Values) *httptest.ResponseRecorder {
 	t.Helper()
 	pages, err := template.ParseFS(assets, "templates/*.html")
@@ -81,7 +85,7 @@ func TestObjectVersionsListAndDelete(t *testing.T) {
 	form.Set("confirm_text", "permanently delete")
 	result := versionsTestRequest(t, store, http.MethodPost, "/objects/delete-versions", form)
 	require.Equal(t, http.StatusOK, result.Code, result.Body.String())
-	require.Equal(t, []string{"v2", "v3"}, store.deleted)
+	require.ElementsMatch(t, []string{"v2", "v3"}, store.deleted)
 	require.Equal(t, []bool{false, false}, store.bypass)
 	require.Contains(t, result.Body.String(), "Deleted 2 of 3 versions.")
 	require.Contains(t, result.Body.String(), "Object retention or legal hold prevents this operation")

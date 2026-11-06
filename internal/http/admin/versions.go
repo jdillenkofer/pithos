@@ -172,25 +172,20 @@ func (a *App) deleteVersions(w http.ResponseWriter, r *http.Request) {
 	// governance bypass capability. Compliance retention is never bypassed.
 	bypass := r.PostForm.Get("bypass_governance") == "yes"
 	view := deleteVersionsView{objectVersionsView: a.versionsBase(r, b, k), Selected: versions}
-	for _, version := range versions {
-		result := deleteVersionResult{Version: version}
-		_, err := a.options.Storage.DeleteObject(r.Context(), b, k, &storage.DeleteObjectOptions{VersionID: &version, BypassGovernanceRetention: bypass})
-		if err != nil {
-			result.Error = versionDeleteError(err)
-		} else {
-			view.Deleted++
-			a.audit(r, "AdminDeleteObjectVersion")
-		}
-		view.Results = append(view.Results, result)
+	refs := make([]objectRef, len(versions))
+	for i, version := range versions {
+		refs[i] = objectRef{Key: k.String(), Version: version}
 	}
+	failures := a.deleteSelected(r.Context(), b, refs, bypass)
+	for i, version := range versions {
+		view.Results = append(view.Results, deleteVersionResult{Version: version, Error: failures[i]})
+		if failures[i] == "" {
+			view.Deleted++
+		}
+	}
+	a.audit(r, "AdminDeleteObjectVersions")
 	if bypass {
 		a.audit(r, "AdminBypassGovernanceRetention")
 	}
 	a.render(w, r, "Delete versions", "delete-versions", view)
-}
-
-// versionDeleteError maps storage errors to messages without backend details.
-func versionDeleteError(err error) string {
-	_, message := objectErrorMessage(err)
-	return message
 }

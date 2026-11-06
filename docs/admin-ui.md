@@ -292,7 +292,7 @@ event shows its identity, request, resource, outcome, Object Lock and
 integrity details; backend error messages are omitted, the error code is shown.
 
 Console actions are recorded as `Admin…` events, for example `AdminLogin`,
-`AdminCreateBucket`, `AdminPutBucketLifecycle`, `AdminDeleteObjectVersion` or
+`AdminCreateBucket`, `AdminPutBucketLifecycle`, `AdminDeleteObjectVersions` or
 `AdminSavePolicy`.
 
 Verification runs in the background with a progress bar, throughput and
