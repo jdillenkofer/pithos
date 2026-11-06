@@ -458,8 +458,9 @@ type Ed25519SigningConfiguration struct {
 	PrivateKey string                     `json:"privateKey,omitempty"` // File path or base64 encoded
 	Vault      *VaultSigningConfiguration `json:"vault,omitempty"`
 	// PublicKey optionally pins the key used to verify signatures (file path or
-	// base64 encoded). It must match a local private key and is required to
-	// verify Vault-held keys.
+	// base64 encoded). It must match the local private key or, checked with a
+	// probe signature at startup, the Vault-held key. It is required to verify
+	// Vault-held keys.
 	PublicKey string `json:"publicKey,omitempty"`
 }
 
@@ -500,6 +501,25 @@ func (s *SigningConfiguration) VerificationKeys() (ed ed25519.PublicKey, ml *mld
 		ml = private.PublicKey()
 	}
 	return ed, ml, nil
+}
+
+// vaultKeyProbe is signed once at startup to check a pinned public key
+// against the Vault-held key, which Vault never exposes to the signer.
+var vaultKeyProbe = []byte("pithos audit signing.ed25519.publicKey check")
+
+func checkPinnedVaultKey(signer signing.Signer, publicKey string) error {
+	edPub, err := signing.LoadEd25519PublicKey(publicKey)
+	if err != nil {
+		return fmt.Errorf("failed to load Ed25519 public key: %w", err)
+	}
+	signature, err := signer.Sign(vaultKeyProbe)
+	if err != nil {
+		return fmt.Errorf("failed to check signing.ed25519.publicKey against Vault: %w", err)
+	}
+	if !ed25519.Verify(edPub, vaultKeyProbe, signature) {
+		return errors.New("signing.ed25519.publicKey does not match the Vault signing key")
+	}
+	return nil
 }
 
 type SigningConfiguration struct {
@@ -576,10 +596,17 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		if vc.KeyPath == "" {
 			return nil, errors.New("signing.ed25519.vault.keyPath is required")
 		}
-		edSigner, err = signingVault.NewSigner(vc.Address, vc.Token, vc.RoleID, vc.SecretID, vc.KeyPath, nil)
+		vaultSigner, err := signingVault.NewSigner(vc.Address, vc.Token, vc.RoleID, vc.SecretID, vc.KeyPath, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Vault signer: %w", err)
 		}
+		if a.Signing.Ed25519.PublicKey != "" {
+			if err = checkPinnedVaultKey(vaultSigner, a.Signing.Ed25519.PublicKey); err != nil {
+				vaultSigner.Close()
+				return nil, err
+			}
+		}
+		edSigner = vaultSigner
 	} else {
 		// Use Local Ed25519 Key
 		if a.Signing.Ed25519.PrivateKey == "" {

@@ -77,9 +77,12 @@ Pithos provides cryptographically signed audit logs for all storage operations v
 `signing.ed25519.publicKey` and `signing.mlDsa87.publicKey` optionally hold
 the public keys (base64 or a file path, as written by `audit-log keygen`).
 Startup fails if a configured public key does not match its local private key.
-The admin console verifies signatures with these keys, or with keys derived
-from the local private keys; an Ed25519 key held in Vault needs
-`signing.ed25519.publicKey` to be verified there.
+For an Ed25519 key held in Vault, startup signs a fixed probe message through
+Vault and fails if the pinned key does not verify it, so Vault must be
+reachable at startup when `signing.ed25519.publicKey` is set. The admin console
+verifies signatures with these keys, or with keys derived from the local
+private keys; an Ed25519 key held in Vault needs `signing.ed25519.publicKey` to
+be verified there. After rotating the Vault transit key, update the pinned key.
 
 ```json
 "signing": {
