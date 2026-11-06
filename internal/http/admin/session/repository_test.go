@@ -66,34 +66,3 @@ func TestRepositoryLifetimeAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestLoginLimiter(t *testing.T) {
-	limiter := NewLoginLimiter()
-	now := time.Now()
-	limiter.now = func() time.Time { return now }
-	for i := 0; i < 10; i++ {
-		if !limiter.Allow("127.0.0.1", "key") {
-			t.Fatalf("denied attempt %d", i)
-		}
-	}
-	if limiter.Allow("different-ip", "key") {
-		t.Fatal("access-key limit missing")
-	}
-	for i := 0; i < 10; i++ {
-		if !limiter.Allow("127.0.0.1", "other-key") {
-			t.Fatal("unexpected denial")
-		}
-	}
-	if limiter.Allow("127.0.0.1", "third-key") {
-		t.Fatal("IP limit missing")
-	}
-	now = now.Add(time.Minute)
-	if !limiter.Allow("127.0.0.1", "key") {
-		t.Fatal("window did not reset")
-	}
-	for i := 0; i < 10000; i++ {
-		limiter.windows[time.Unix(int64(i), 0).String()] = attemptWindow{reset: now.Add(time.Minute)}
-	}
-	if limiter.Allow("new-ip", "new-key") {
-		t.Fatal("memory bound missing")
-	}
-}

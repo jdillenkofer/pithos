@@ -112,7 +112,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		a.renderLogin(w, r, 401, "Invalid access key or secret.", "")
 		return
 	}
-	if !a.limiter.Allow(clientIP(r), key) {
+	if !a.limiter.Allow(clientIP(r)) {
 		w.Header().Set("Retry-After", "60")
 		a.audit(r, "AdminLoginRateLimited")
 		a.renderLogin(w, r, 429, "Too many login attempts. Try again in a minute.", key)
