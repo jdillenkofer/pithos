@@ -234,7 +234,7 @@ and container-local healthchecks cannot assume those utilities exist.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PITHOS_ADMIN_ENABLED` | Enable the admin listener; automatically disabled when authentication is disabled | `true` |
+| `PITHOS_ADMIN_PORT_ENABLED` | Enable the admin listener; stays disabled when authentication is disabled | `false` |
 | `PITHOS_ADMIN_PORT` | Port for the admin UI | `9001` |
 | `PITHOS_ADMIN_BIND_ADDRESS` | Admin listener bind address | Inherits `PITHOS_BIND_ADDRESS` (`0.0.0.0`) |
 | `PITHOS_ADMIN_ACCESS_KEYS` | Comma-separated access-key allowlist for global admin UI access | Empty (no logins allowed) |
@@ -254,7 +254,7 @@ The allowlist grants global admin UI access across all accounts; it does not
 change S3 API permissions or policy/Lua authorization. Only allowlisted
 credentials may log in. An empty allowlist grants nobody access.
 
-Equivalent command-line flags are `-adminEnabled`, `-adminPort`,
+Equivalent command-line flags are `-adminPortEnabled`, `-adminPort`,
 `-adminBindAddress`, `-adminAccessKeys`, `-adminSecureCookie`,
 `-adminSessionIdleMinutes`, `-adminSessionMaxHours`, and `-adminDatabaseIndex`.
 

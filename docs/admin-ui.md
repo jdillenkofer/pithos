@@ -7,8 +7,9 @@ separate from the S3 API (`9000`) and monitoring (`9090`); its default port is
 
 ## Enable access
 
-The listener is enabled by default and inherits `PITHOS_BIND_ADDRESS`
-(`0.0.0.0`). It is automatically disabled when authentication is disabled. An
+The listener is disabled by default; enable it with
+`PITHOS_ADMIN_PORT_ENABLED=true`. It inherits `PITHOS_BIND_ADDRESS`
+(`0.0.0.0`) and stays disabled when authentication is disabled. An
 empty admin allowlist permits **no logins**, even when a credential's S3 policy
 allows `*`.
 
@@ -16,6 +17,7 @@ Configure a normal credential with your chosen credential provider, then put
 its access-key ID in the admin allowlist:
 
 ```sh
+export PITHOS_ADMIN_PORT_ENABLED=true
 export PITHOS_ADMIN_ACCESS_KEYS="my-admin-access-key"
 export PITHOS_ADMIN_SECURE_COOKIE=false # local plain-HTTP use only
 ./pithos serve
@@ -79,7 +81,7 @@ prevent saving. Never loosen file permissions to work around this.
 
 | Environment variable | Default | Meaning |
 |---|---|---|
-| `PITHOS_ADMIN_ENABLED` | `true` | Start the admin listener when authentication is enabled |
+| `PITHOS_ADMIN_PORT_ENABLED` | `false` | Start the admin listener; requires authentication |
 | `PITHOS_ADMIN_PORT` | `9001` | Listener port |
 | `PITHOS_ADMIN_BIND_ADDRESS` | `BindAddress` | Listener address, inherited dynamically unless overridden |
 | `PITHOS_ADMIN_ACCESS_KEYS` | Empty | Comma-separated global-admin access-key IDs |
@@ -88,7 +90,7 @@ prevent saving. Never loosen file permissions to work around this.
 | `PITHOS_ADMIN_SESSION_MAX_HOURS` | `12` | Absolute session lifetime |
 | `PITHOS_ADMIN_DATABASE_INDEX` | `0` | Configured session database index |
 
-Matching CLI flags are `-adminEnabled`, `-adminPort`, `-adminBindAddress`,
+Matching CLI flags are `-adminPortEnabled`, `-adminPort`, `-adminBindAddress`,
 `-adminAccessKeys`, `-adminSecureCookie`, `-adminSessionIdleMinutes`,
 `-adminSessionMaxHours`, and `-adminDatabaseIndex`. Environment variables follow
 the same precedence as existing settings. Session durations must be positive

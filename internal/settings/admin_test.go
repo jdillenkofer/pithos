@@ -9,7 +9,7 @@ import (
 
 func TestAdminDefaults(t *testing.T) {
 	s := &Settings{}
-	assert.True(t, s.AdminEnabled())
+	assert.False(t, s.AdminPortEnabled(), "the admin listener is opt-in")
 	assert.Equal(t, 9001, s.AdminPort())
 	assert.Equal(t, s.BindAddress(), s.AdminBindAddress())
 	assert.True(t, s.AdminSecureCookie())
@@ -21,10 +21,11 @@ func TestAdminDefaults(t *testing.T) {
 
 func TestAdminRequiresAuthentication(t *testing.T) {
 	for _, explicitlyEnabled := range []bool{false, true} {
-		s := &Settings{authenticationEnabled: addrOf(false), adminEnabled: addrOf(explicitlyEnabled)}
-		assert.False(t, s.AdminEnabled())
+		s := &Settings{authenticationEnabled: addrOf(false), adminPortEnabled: addrOf(explicitlyEnabled)}
+		assert.False(t, s.AdminPortEnabled())
 	}
-	assert.False(t, (&Settings{adminEnabled: addrOf(false)}).AdminEnabled())
+	assert.False(t, (&Settings{adminPortEnabled: addrOf(false)}).AdminPortEnabled())
+	assert.True(t, (&Settings{adminPortEnabled: addrOf(true)}).AdminPortEnabled())
 }
 
 func TestAdminBindAddressInheritance(t *testing.T) {
@@ -36,12 +37,12 @@ func TestAdminBindAddressInheritance(t *testing.T) {
 
 func TestAdminCommandLineSettings(t *testing.T) {
 	s, err := loadSettingsFromCmdArgs([]string{
-		"-adminEnabled=false", "-adminPort=9101", "-adminBindAddress=127.0.0.2",
+		"-adminPortEnabled=true", "-adminPort=9101", "-adminBindAddress=127.0.0.2",
 		"-adminSecureCookie=false", "-adminSessionIdleMinutes=15",
 		"-adminSessionMaxHours=8", "-adminDatabaseIndex=2", "-adminAccessKeys= first, ,second ",
 	})
 	require.NoError(t, err)
-	assert.False(t, s.AdminEnabled())
+	assert.True(t, s.AdminPortRequested())
 	assert.Equal(t, 9101, s.AdminPort())
 	assert.Equal(t, "127.0.0.2", s.AdminBindAddress())
 	assert.False(t, s.AdminSecureCookie())
@@ -52,7 +53,7 @@ func TestAdminCommandLineSettings(t *testing.T) {
 }
 
 func TestAdminEnvironmentSettings(t *testing.T) {
-	t.Setenv(adminEnabledEnvKey, "false")
+	t.Setenv(adminPortEnabledEnvKey, "true")
 	t.Setenv(adminPortEnvKey, "9101")
 	t.Setenv(adminBindAddressEnvKey, "127.0.0.2")
 	t.Setenv(adminSecureCookieEnvKey, "false")
@@ -62,7 +63,7 @@ func TestAdminEnvironmentSettings(t *testing.T) {
 	t.Setenv(adminAccessKeysEnvKey, " first, ,second ")
 	s, err := loadSettingsFromEnv()
 	require.NoError(t, err)
-	assert.False(t, s.AdminEnabled())
+	assert.True(t, s.AdminPortRequested())
 	assert.Equal(t, 9101, s.AdminPort())
 	assert.Equal(t, "127.0.0.2", s.AdminBindAddress())
 	assert.False(t, s.AdminSecureCookie())

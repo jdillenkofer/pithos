@@ -322,7 +322,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	}
 
 	var httpAdminServer *http.Server
-	if settings.AdminEnabled() {
+	if settings.AdminPortEnabled() {
 		adminContext, stopAdmin := context.WithCancel(ctx)
 		defer stopAdmin()
 		adminHandler, err := admin.NewHandler(admin.Options{
@@ -348,8 +348,8 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 			IdleTimeout:       idleTimeout,
 			MaxHeaderBytes:    maxHeaderBytes,
 		}
-	} else if !authenticationEnabled {
-		slog.Info("Admin listener disabled because authentication is disabled")
+	} else if settings.AdminPortRequested() {
+		slog.Warn("Admin listener disabled because authentication is disabled")
 	}
 
 	signalCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)

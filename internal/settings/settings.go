@@ -18,7 +18,7 @@ const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
 const defaultMonitoringPort = 9090
 const defaultMonitoringPortEnabled = false
-const defaultAdminEnabled = true
+const defaultAdminPortEnabled = false
 const defaultAdminPort = 9001
 const defaultAdminSecureCookie = true
 const defaultAdminSessionIdleMinutes = 30
@@ -54,7 +54,7 @@ type Settings struct {
 	port                             *int     `mergable:""`
 	monitoringPort                   *int     `mergable:""`
 	monitoringPortEnabled            *bool    `mergable:""`
-	adminEnabled                     *bool    `mergable:""`
+	adminPortEnabled                 *bool    `mergable:""`
 	adminPort                        *int     `mergable:""`
 	adminBindAddress                 *string  `mergable:""`
 	adminSecureCookie                *bool    `mergable:""`
@@ -134,10 +134,16 @@ func (s *Settings) MonitoringPortEnabled() bool {
 	return valueOrDefault(s.monitoringPortEnabled, defaultMonitoringPortEnabled)
 }
 
-// AdminEnabled reports whether the admin listener should run. Admin access
-// always requires authentication, even when the listener is enabled by default.
-func (s *Settings) AdminEnabled() bool {
-	return s.AuthenticationEnabled() && valueOrDefault(s.adminEnabled, defaultAdminEnabled)
+// AdminPortRequested reports whether the admin listener was switched on. The
+// listener is opt-in so upgrades never open a new port.
+func (s *Settings) AdminPortRequested() bool {
+	return valueOrDefault(s.adminPortEnabled, defaultAdminPortEnabled)
+}
+
+// AdminPortEnabled reports whether the admin listener should run. Admin access
+// always requires authentication, even when the listener was switched on.
+func (s *Settings) AdminPortEnabled() bool {
+	return s.AuthenticationEnabled() && s.AdminPortRequested()
 }
 
 func (s *Settings) AdminPort() int {

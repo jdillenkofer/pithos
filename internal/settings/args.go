@@ -70,7 +70,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	portAccessor := registerIntFlag(serveCommand, "port", defaultPort, "the port for the s3 api")
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
-	adminEnabledAccessor := registerBoolFlag(serveCommand, "adminEnabled", defaultAdminEnabled, "enable the admin UI listener; automatically disabled when authentication is disabled")
+	adminPortEnabledAccessor := registerBoolFlag(serveCommand, "adminPortEnabled", defaultAdminPortEnabled, "determines if the admin UI port of pithos is enabled; requires authentication")
 	adminPortAccessor := registerIntFlag(serveCommand, "adminPort", defaultAdminPort, "the port for the admin UI")
 	adminBindAddressAccessor := registerStringFlag(serveCommand, "adminBindAddress", "", "the admin UI bind address; defaults to bindAddress")
 	adminSecureCookieAccessor := registerBoolFlag(serveCommand, "adminSecureCookie", defaultAdminSecureCookie, "require HTTPS for admin session cookies; set to false for plain-HTTP local use")
@@ -134,7 +134,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		port:                             portAccessor(),
 		monitoringPort:                   monitoringPortAccessor(),
 		monitoringPortEnabled:            monitoringPortEnabledAccessor(),
-		adminEnabled:                     adminEnabledAccessor(),
+		adminPortEnabled:                 adminPortEnabledAccessor(),
 		adminPort:                        adminPortAccessor(),
 		adminBindAddress:                 adminBindAddressAccessor(),
 		adminSecureCookie:                adminSecureCookieAccessor(),

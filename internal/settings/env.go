@@ -21,7 +21,7 @@ const bindAddressEnvKey = envKeyPrefix + "_BIND_ADDRESS"
 const portEnvKey = envKeyPrefix + "_PORT"
 const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
-const adminEnabledEnvKey = envKeyPrefix + "_ADMIN_ENABLED"
+const adminPortEnabledEnvKey = envKeyPrefix + "_ADMIN_PORT_ENABLED"
 const adminPortEnvKey = envKeyPrefix + "_ADMIN_PORT"
 const adminBindAddressEnvKey = envKeyPrefix + "_ADMIN_BIND_ADDRESS"
 const adminSecureCookieEnvKey = envKeyPrefix + "_ADMIN_SECURE_COOKIE"
@@ -125,7 +125,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	if err != nil {
 		return nil, err
 	}
-	adminEnabled, err := getBoolFromEnv(adminEnabledEnvKey)
+	adminPortEnabled, err := getBoolFromEnv(adminPortEnabledEnvKey)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		port:                             port,
 		monitoringPort:                   monitoringPort,
 		monitoringPortEnabled:            monitoringPortEnabled,
-		adminEnabled:                     adminEnabled,
+		adminPortEnabled:                 adminPortEnabled,
 		adminPort:                        adminPort,
 		adminBindAddress:                 getStringFromEnv(adminBindAddressEnvKey),
 		adminSecureCookie:                adminSecureCookie,
