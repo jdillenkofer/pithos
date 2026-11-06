@@ -71,6 +71,7 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
+	w.Header().Set(bucketRegionHeader, s.region)
 	w.WriteHeader(200)
 }
 

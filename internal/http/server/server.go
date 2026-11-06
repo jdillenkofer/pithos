@@ -264,6 +264,7 @@ const deleteMarkerHeader = "x-amz-delete-marker"
 const objectAttributesHeader = "x-amz-object-attributes"
 const maxPartsHeader = "x-amz-max-parts"
 const partNumberMarkerHeader = "x-amz-part-number-marker"
+const bucketRegionHeader = "x-amz-bucket-region"
 
 const copySourceHeader = "x-amz-copy-source"
 const copySourceVersionIDHeader = "x-amz-copy-source-version-id"

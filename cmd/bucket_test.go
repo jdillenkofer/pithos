@@ -116,6 +116,7 @@ func TestHeadBucket(t *testing.T) {
 				assert.Fail(t, "HeadBucket failed", "err %v", err)
 			}
 			assert.NotNil(t, headBucketResult)
+			assert.Equal(t, region, aws.ToString(headBucketResult.BucketRegion))
 		})
 	})
 }
