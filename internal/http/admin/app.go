@@ -110,6 +110,8 @@ func navSection(title string) string {
 	switch {
 	case title == "Objects", title == "Object details", title == "Upload", title == "Create bucket", strings.HasPrefix(title, "Bucket: "):
 		return "Buckets"
+	case strings.HasPrefix(title, "Policy: "):
+		return "Policies"
 	case title == "Credential created":
 		return "Credentials"
 	}

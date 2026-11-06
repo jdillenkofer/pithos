@@ -1,0 +1,149 @@
+{{define "policy_tabs"}}
+<nav class="tabs" aria-label="Policy editor">
+  <a href="/policies" {{if ne . "json"}}aria-current="page"{{end}}>Policies</a>
+  <a href="/policies?view=json" {{if eq . "json"}}aria-current="page"{{end}}>JSON editor and simulator</a>
+</nav>
+{{end}}
+
+{{define "policy_form_fields"}}<input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="hash" value="{{.Hash}}">{{end}}
+
+{{define "policy_value_row"}}
+<div class="lifecycle-repeat-row policy-value-row" data-repeat-row>
+  <label class="field"><span class="field-label">{{.Label}}</span><input name="{{.Name}}" value="{{.Value}}" spellcheck="false" {{if .List}}list="{{.List}}"{{end}} placeholder="{{.Placeholder}}"></label>
+  <button type="button" data-remove-row>Remove</button>
+</div>
+{{end}}
+
+{{define "policy_condition_row"}}
+<div class="lifecycle-repeat-row policy-condition-row" data-repeat-row>
+  <label class="field"><span class="field-label">Operator</span><select name="condition_operator">{{range .Operators}}<option {{if eq . $.Operator}}selected{{end}}>{{.}}</option>{{end}}</select></label>
+  <label class="field"><span class="field-label">Modifier</span><select name="condition_modifier">{{range .Modifiers}}<option value="{{.}}" {{if eq . $.Modifier}}selected{{end}}>{{if .}}{{.}}{{else}}None{{end}}</option>{{end}}</select></label>
+  <label class="field"><span class="field-label">Key</span><input name="condition_key" value="{{.Key}}" list="policy-condition-keys" spellcheck="false" placeholder="aws:SourceIp"></label>
+  <label class="field"><span class="field-label">Value</span><input name="condition_value" value="{{.Value}}" spellcheck="false" placeholder="10.0.0.0/8"></label>
+  <button type="button" data-remove-row>Remove</button>
+</div>
+{{end}}
+
+{{define "policy_forms"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span>{{if or .Policy .Statement}}<a href="/policies">Policies</a><span class="sep">›</span>{{if .Statement}}{{if .Statement.Create}}<span>Create policy</span>{{else}}<a href="/policies?policy={{.Policy}}">{{.Policy}}</a><span class="sep">›</span><span>{{if .Statement.Index}}Edit statement{{else}}Add statement{{end}}</span>{{end}}{{else}}<span>{{.Policy}}</span>{{end}}{{else}}<span>Policies</span>{{end}}</div>
+<div class="page-head"><div><h1>{{if .Statement}}{{if .Statement.Create}}Create policy{{else}}{{.Policy}}{{end}}{{else if .Policy}}{{.Policy}}{{else}}Authorization policy{{end}}</h1><p class="subtitle">JSON policies decide which S3 requests are allowed. The admin console is never restricted by them.</p></div></div>
+{{template "policy_tabs" "forms"}}
+{{with .Notice}}<div class="alert {{.Kind}}" role="status"><p>{{.Text}}</p></div>{{end}}
+{{if .Invalid}}
+<div class="alert bad" role="status"><p>The active policy file cannot be edited through forms: {{.Invalid}}</p><p><a href="/policies?view=json">Fix it in the JSON editor.</a></p></div>
+{{else if .Statement}}{{template "policy_statement_editor" .}}
+{{else if .Policy}}{{template "policy_detail" .}}
+{{else}}
+<div class="container">
+  <div class="container-head"><div><h2>Policies <span class="count">({{len .Policies}})</span></h2><p>A policy applies to the subjects it is assigned to. An explicit Deny wins over every Allow, and requests no statement allows are denied.</p></div><div class="header-actions">
+    <a class="button-link primary" href="/policies?editor=create">Create policy</a>
+  </div></div>
+  <div class="table-wrap divider"><table><thead><tr><th>Policy</th><th class="num">Statements</th><th>Assigned to</th></tr></thead><tbody>
+    {{range .Policies}}<tr><td><a href="/policies?policy={{.Name}}">{{.Name}}</a></td><td class="num">{{.Statements}}</td><td>{{range $i, $s := .Subjects}}{{if $i}}, {{end}}{{$s}}{{else}}<span class="subtitle">Not assigned</span>{{end}}</td></tr>{{end}}
+  </tbody></table></div>
+</div>
+<p class="hint">Saving through forms writes the file again as formatted JSON, sorted by policy name. Use the <a href="/policies?view=json#simulator">simulator</a> to test a request against the active policies.</p>
+{{end}}
+{{end}}
+
+{{define "policy_detail"}}
+<div class="container" id="statements">
+  <div class="container-head"><div><h2>Statements <span class="count">({{len .Detail}})</span></h2><p>Every statement allows or denies actions on resources, optionally only when all of its conditions match.</p></div><div class="header-actions">
+    <a class="button-link primary" href="/policies?policy={{.Policy}}&amp;statement=new">Add statement</a>
+  </div></div>
+  <div class="table-wrap divider"><table><thead><tr><th>Statement ID</th><th>Effect</th><th>Actions</th><th>Resources</th><th>Conditions</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+    {{range .Detail}}<tr>
+      <td>{{if .Sid}}{{.Sid}}{{else}}<span class="subtitle">no Sid</span>{{end}}</td>
+      <td><span class="status {{if eq .Effect "Allow"}}ok{{else}}bad{{end}}">{{.Effect}}</span></td>
+      <td class="mono">{{range .Actions}}<div>{{.}}</div>{{end}}</td>
+      <td class="mono">{{range .Resources}}<div>{{.}}</div>{{end}}</td>
+      <td class="mono">{{range .Conditions}}<div>{{.}}</div>{{else}}<span class="subtitle">None</span>{{end}}</td>
+      <td class="actions">
+        <a class="button-link small" href="/policies?policy={{$.Policy}}&amp;statement={{.Index}}">Edit</a>
+        <form method="post" action="/policies/edit">{{template "policy_form_fields" $}}<input type="hidden" name="policy" value="{{$.Policy}}"><input type="hidden" name="statement" value="{{.Index}}"><button class="small danger-outline" name="policy_action" value="delete_statement" data-confirm="Requests this statement allows or denies are evaluated without it from now on." data-confirm-title="Delete statement?" data-confirm-action="Delete statement">Delete</button></form>
+      </td>
+    </tr>{{end}}
+  </tbody></table></div>
+</div>
+
+<div class="container" id="subjects">
+  <div class="container-head"><div><h2>Assigned to <span class="count">({{len .Subjects}})</span></h2><p>The policy applies to these callers. Principals keep their policies when their access keys rotate.</p></div><div class="header-actions">
+    {{if not .Anonymous}}<form method="post" action="/policies/edit">{{template "policy_form_fields" .}}<input type="hidden" name="policy" value="{{.Policy}}"><input type="hidden" name="subject_type" value="anonymous"><button name="policy_action" value="add_subject" data-confirm="Requests without credentials are evaluated against this policy from now on." data-confirm-title="Apply to anonymous requests?" data-confirm-action="Apply policy">Apply to anonymous requests</button></form>{{end}}
+  </div></div>
+  <div class="table-wrap divider"><table><thead><tr><th>Subject</th><th>Account ID</th><th>Principal ID</th><th>Access keys</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+    {{range .Subjects}}<tr>
+      <td>{{if eq .Type "anonymous"}}Anonymous requests{{else}}Principal{{end}}</td><td>{{.Account}}</td><td>{{.Principal}}</td><td class="mono">{{.AccessKey}}</td>
+      <td class="actions"><form method="post" action="/policies/edit">{{template "policy_form_fields" $}}<input type="hidden" name="policy" value="{{$.Policy}}"><input type="hidden" name="binding" value="{{.Binding}}"><input type="hidden" name="subject" value="{{.Index}}"><button class="small danger-outline" name="policy_action" value="remove_subject" data-confirm="Requests of this subject are no longer evaluated against this policy." data-confirm-title="Remove assignment?" data-confirm-action="Remove">Remove</button></form></td>
+    </tr>{{else}}<tr><td colspan="5" class="empty"><strong>Not assigned</strong>The policy applies to no caller yet. Assign it to a principal below.</td></tr>{{end}}
+  </tbody></table></div>
+  <form method="post" action="/policies/edit" class="container-body divider">
+    {{template "policy_form_fields" .}}<input type="hidden" name="policy" value="{{.Policy}}"><input type="hidden" name="subject_type" value="principal">
+    <h3>Assign to a principal</h3>
+    {{if .Identities}}<label class="field"><span class="field-label">Fill from credential <span class="hint">- optional</span></span>
+      <select data-sim-identity><option value="">Choose a credential…</option>{{range .Identities}}<option value="{{.AccessKey}}" data-account="{{.Account}}" data-principal="{{.Principal}}">{{.AccessKey}} ({{.Principal}} in {{.Account}})</option>{{end}}</select></label>{{end}}
+    <div class="form-grid">
+      <label class="field"><span class="field-label">Account ID</span><input name="account" required data-sim-field="account"></label>
+      <label class="field"><span class="field-label">Principal ID</span><input name="principal" required data-sim-field="principal"></label>
+      <div class="actions-row"><button class="primary" name="policy_action" value="add_subject">Assign policy</button></div>
+    </div>
+  </form>
+</div>
+
+<div class="container" id="settings">
+  <div class="container-head"><div><h2>Policy settings</h2><p>Renaming keeps every assignment. Deleting the policy also removes its assignments.</p></div><div class="header-actions">
+    <form method="post" action="/policies/edit">{{template "policy_form_fields" .}}<input type="hidden" name="policy" value="{{.Policy}}"><button class="danger-outline" name="policy_action" value="delete" data-confirm="The policy and all of its assignments are removed. A backup of the file is kept." data-confirm-title="Delete policy?" data-confirm-action="Delete policy">Delete policy</button></form>
+  </div></div>
+  <form method="post" action="/policies/edit" class="container-body">
+    {{template "policy_form_fields" .}}<input type="hidden" name="policy" value="{{.Policy}}">
+    <div class="form-grid">
+      <label class="field"><span class="field-label">Policy name</span><input name="name" value="{{.Policy}}" required maxlength="128"></label>
+      <div class="actions-row"><button name="policy_action" value="rename">Rename</button></div>
+    </div>
+  </form>
+</div>
+{{end}}
+
+{{define "policy_statement_editor"}}
+<form method="post" action="/policies/edit">
+{{template "policy_form_fields" .}}
+{{if .Statement.Create}}<input type="hidden" name="policy_action" value="create">{{else}}<input type="hidden" name="policy_action" value="save_statement"><input type="hidden" name="policy" value="{{.Policy}}"><input type="hidden" name="statement" value="{{.Statement.Index}}">{{end}}
+<datalist id="policy-actions">{{range .Actions}}<option value="{{.}}">{{end}}</datalist>
+<datalist id="policy-condition-keys">{{range .ConditionKeys}}<option value="{{.}}">{{end}}</datalist>
+<div class="container lifecycle-editor policy-editor">
+  <div class="container-head"><div><h2>{{if .Statement.Create}}Policy and first statement{{else if .Statement.Index}}Edit statement{{else}}Add statement{{end}}</h2><p>A statement matches a request when one of its actions and one of its resources match and every condition is true.</p></div></div>
+  <div class="container-body form-stack">
+    {{if .Statement.Create}}<label class="field"><span class="field-label">Policy name</span><input name="name" value="{{.Statement.Name}}" required maxlength="128" placeholder="public-read"><span class="hint">Assign the policy to principals after creating it.</span></label>{{end}}
+    <label class="field"><span class="field-label">Statement ID <span class="hint">- optional</span></span><input name="sid" value="{{.Statement.Sid}}" placeholder="ReadWebsite"><span class="hint">Shown in simulator results to identify the statement.</span></label>
+    <fieldset><legend>Effect</legend><div class="option-group">
+      <label class="option"><input type="radio" name="effect" value="Allow" {{if eq .Statement.Effect "Allow"}}checked{{end}} required><span class="option-body"><span class="option-title">Allow</span><span class="hint">Matching requests are allowed unless another statement denies them.</span></span></label>
+      <label class="option"><input type="radio" name="effect" value="Deny" {{if eq .Statement.Effect "Deny"}}checked{{end}}><span class="option-body"><span class="option-title">Deny</span><span class="hint">Matching requests are denied, even when another statement allows them.</span></span></label>
+    </div></fieldset>
+    <fieldset><legend>Actions</legend>
+      <p class="hint">S3 actions such as s3:GetObject. * matches any characters and ? one character, so s3:Get* covers every read action.</p>
+      <div data-repeat-editor data-max="1000">
+        <div data-repeat-rows>{{range .Statement.ActionRows}}{{template "policy_value_row" .}}{{end}}</div>
+        <template>{{template "policy_value_row" .Statement.BlankAction}}</template>
+        <button type="button" data-add-row>Add action</button>
+      </div>
+    </fieldset>
+    <fieldset><legend>Resources</legend>
+      <p class="hint">S3 ARNs: arn:aws:s3:::bucket for bucket actions, arn:aws:s3:::bucket/key for object actions. Wildcards work as for actions.</p>
+      <div data-repeat-editor data-max="1000">
+        <div data-repeat-rows>{{range .Statement.ResourceRows}}{{template "policy_value_row" .}}{{end}}</div>
+        <template>{{template "policy_value_row" .Statement.BlankResource}}</template>
+        <button type="button" data-add-row>Add resource</button>
+      </div>
+    </fieldset>
+    <fieldset><legend>Conditions <span class="hint">- optional</span></legend>
+      <p class="hint">All conditions must match. Rows with the same operator, modifier and key are one condition that matches any of their values. Numbers, booleans and dates are entered as text, dates in RFC3339.</p>
+      <div data-repeat-editor data-max="1000">
+        <div data-repeat-rows>{{range .Statement.Conditions}}{{template "policy_condition_row" .}}{{end}}</div>
+        <template>{{template "policy_condition_row" .Statement.BlankCondition}}</template>
+        <button type="button" data-add-row>Add condition</button>
+      </div>
+    </fieldset>
+    <div class="actions-row"><a class="button-link" href="{{if .Statement.Create}}/policies{{else}}/policies?policy={{.Policy}}{{end}}">Cancel</a><button class="primary">{{if .Statement.Create}}Create policy{{else}}Save statement{{end}}</button></div>
+  </div>
+</div>
+</form>
+{{end}}

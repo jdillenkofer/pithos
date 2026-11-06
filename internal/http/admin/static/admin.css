@@ -425,6 +425,13 @@ dialog.modal .actions-row { margin-top: 8px; }
   .lifecycle-repeat-row > button { grid-row: auto; justify-self: start; }
 }
 .lifecycle-editor [data-repeat-rows] { margin-top: 12px; }
+@media (min-width: 1101px) {
+  .lifecycle-editor .policy-value-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .lifecycle-editor .policy-condition-row { grid-template-columns: repeat(2, minmax(0, 12rem)) repeat(2, minmax(0, 1fr)) auto; }
+  /* A button placed in an explicit row is otherwise auto-placed first. */
+  .lifecycle-editor :is(.policy-value-row, .policy-condition-row) > button { grid-column: -2; }
+}
+.policy-editor fieldset > .hint { margin: 0 0 4px; }
 .lifecycle-summary { display: grid; grid-template-columns: minmax(8rem, 12rem) 1fr; gap: 16px 24px; margin: 12px 0 0; }
 .lifecycle-summary dt { color: var(--muted); }
 .lifecycle-summary dd { margin: 0; overflow-wrap: anywhere; }

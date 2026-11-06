@@ -1,6 +1,7 @@
 {{define "policies"}}
 <div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Policies</span></div>
 <div class="page-head"><div><h1>Authorization policy</h1><p class="subtitle">The active S3 authorization policy ({{if eq .Kind "lua"}}Lua script{{else}}JSON policies{{end}}). The admin console is never restricted by it.</p></div></div>
+{{if .Forms}}{{template "policy_tabs" "json"}}{{end}}
 {{with .Notice}}<div class="alert {{.Kind}}" role="status"><p>{{.Text}}</p></div>{{end}}
 <form method="post" action="/policies/validate">
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">

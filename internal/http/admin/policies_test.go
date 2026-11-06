@@ -189,7 +189,7 @@ func TestPolicyConcurrentSave(t *testing.T) {
 }
 
 func TestPoliciesTemplateEscapesCandidateAndCSRF(t *testing.T) {
-	page, err := template.ParseFiles("templates/policies.html")
+	page, err := template.ParseFiles("templates/policies.html", "templates/policy_forms.html")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestPolicyRoutes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			pages, err = pages.ParseFiles("templates/policies.html")
+			pages, err = pages.ParseFiles("templates/policies.html", "templates/policy_forms.html")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -240,7 +240,7 @@ func TestPolicyRoutes(t *testing.T) {
 			mux := http.NewServeMux()
 			app.registerPolicies(mux)
 			get := httptest.NewRecorder()
-			mux.ServeHTTP(get, httptest.NewRequest("GET", "/policies", nil))
+			mux.ServeHTTP(get, httptest.NewRequest("GET", "/policies?view=json", nil))
 			if get.Code != 200 || !strings.Contains(get.Body.String(), policyHash([]byte(old))) {
 				t.Fatalf("GET: %d %s", get.Code, get.Body.String())
 			}

@@ -38,10 +38,12 @@ type policyNotice struct {
 type policiesPage struct {
 	CSRF, Kind, Candidate, Hash string
 	Notice                      *policyNotice
-	Simulation                  simulationInput
-	Result                      *simulationResult
-	Operations                  []string
-	Identities                  []simulatorIdentity
+	// Forms is true when the JSON policies can also be edited through forms.
+	Forms      bool
+	Simulation simulationInput
+	Result     *simulationResult
+	Operations []string
+	Identities []simulatorIdentity
 }
 
 func (a *App) registerPolicies(mux *http.ServeMux) {
@@ -49,6 +51,7 @@ func (a *App) registerPolicies(mux *http.ServeMux) {
 	mux.HandleFunc("POST /policies/validate", a.policies)
 	mux.HandleFunc("POST /policies/simulate", a.policies)
 	mux.HandleFunc("POST /policies/save", a.policies)
+	mux.HandleFunc("POST /policies/edit", a.editPolicies)
 }
 
 func (a *App) policyLocation() (kind, path string) {
@@ -60,7 +63,11 @@ func (a *App) policyLocation() (kind, path string) {
 
 func (a *App) policies(w http.ResponseWriter, r *http.Request) {
 	kind, path := a.policyLocation()
-	page := policiesPage{CSRF: csrfToken(r), Kind: kind, Operations: policy.SupportedOperations(), Identities: a.simulatorIdentities(r.Context())}
+	page := policiesPage{CSRF: csrfToken(r), Kind: kind, Forms: kind == "policy", Operations: policy.SupportedOperations(), Identities: a.simulatorIdentities(r.Context())}
+	if r.Method == http.MethodGet && kind == "policy" && r.URL.Query().Get("view") != "json" {
+		a.policyForms(w, r, path)
+		return
+	}
 	if r.Method == http.MethodGet {
 		data, err := readPolicyFile(path)
 		if err != nil {
@@ -102,37 +109,38 @@ func (a *App) policies(w http.ResponseWriter, r *http.Request) {
 		}
 		a.audit(r, "AdminSimulatePolicy")
 	case "/policies/save":
-		if !a.savePolicy(w, r, kind, path, &page, candidate) {
+		backup, ok := a.savePolicy(w, r, kind, path, page.Hash, candidate)
+		if !ok {
 			return
 		}
+		page.Hash = policyHash(candidate)
+		page.Notice = &policyNotice{"ok", "Policy saved and reloaded. Backup: " + backup}
 	}
 	a.render(w, r, "Policies", "policies", page)
 }
 
-// savePolicy replaces the active policy. It returns false after it has
-// already written an error response.
-func (a *App) savePolicy(w http.ResponseWriter, r *http.Request, kind, path string, page *policiesPage, candidate []byte) bool {
+// savePolicy replaces the active policy and returns the backup of the old
+// file. It returns false after it has already written an error response.
+func (a *App) savePolicy(w http.ResponseWriter, r *http.Request, kind, path, hash string, candidate []byte) (string, bool) {
 	reload, ok := a.policyReloader(kind)
 	if !ok {
 		a.audit(r, "AdminSavePolicyFailed")
 		a.fail(w, r, 503, "Active authorizer does not support immediate reload; no changes saved")
-		return false
+		return "", false
 	}
-	backup, err := savePolicyCandidate(path, kind, page.Hash, candidate, reload)
+	backup, err := savePolicyCandidate(path, kind, hash, candidate, reload)
 	if errors.Is(err, errPolicyConflict) {
 		a.audit(r, "AdminSavePolicyConflict")
 		a.fail(w, r, 409, err.Error())
-		return false
+		return "", false
 	}
 	if err != nil {
 		a.audit(r, "AdminSavePolicyFailed")
 		a.fail(w, r, 500, err.Error())
-		return false
+		return "", false
 	}
-	page.Hash = policyHash(candidate)
-	page.Notice = &policyNotice{"ok", "Policy saved and reloaded. Backup: " + backup}
 	a.audit(r, "AdminSavePolicy")
-	return true
+	return backup, true
 }
 
 // simulatorIdentities offers the known credentials as simulator callers. It

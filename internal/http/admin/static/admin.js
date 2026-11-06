@@ -105,7 +105,8 @@ document.addEventListener("input", function (event) {
   }
 });
 
-// Policy simulator: choosing a credential fills the caller fields.
+// Policy simulator and assignments: choosing a credential fills the caller
+// fields.
 document.addEventListener("change", function (event) {
   const select = event.target.closest("[data-sim-identity]");
   if (!select) {
@@ -117,9 +118,11 @@ document.addEventListener("change", function (event) {
   if (!anonymous && !option.value) {
     return;
   }
-  form.querySelector('[data-sim-field="account"]').value = anonymous ? "" : option.dataset.account;
-  form.querySelector('[data-sim-field="principal"]').value = anonymous ? "" : option.dataset.principal;
-  form.querySelector('[data-sim-field="accessKey"]').value = anonymous ? "" : option.value;
+  const values = { account: option.dataset.account, principal: option.dataset.principal, accessKey: option.value };
+  // Policy assignments have no access key field.
+  form.querySelectorAll("[data-sim-field]").forEach(function (field) {
+    field.value = anonymous ? "" : values[field.dataset.simField];
+  });
 });
 
 // Lifecycle editors use repeatable rows for tags and transition schedules.
