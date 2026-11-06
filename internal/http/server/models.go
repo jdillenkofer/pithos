@@ -212,6 +212,12 @@ type WebsiteConfigurationResponse struct {
 	RoutingRules          []WebsiteConfigurationRoutingRule          `xml:"RoutingRules>RoutingRule,omitempty"`
 }
 
+type LocationConstraint struct {
+	XMLName xml.Name `xml:"LocationConstraint"`
+	Xmlns   string   `xml:"xmlns,attr,omitempty"`
+	Value   string   `xml:",chardata"`
+}
+
 type BucketVersioningConfiguration struct {
 	XMLName xml.Name `xml:"VersioningConfiguration"`
 	Xmlns   string   `xml:"xmlns,attr,omitempty"`

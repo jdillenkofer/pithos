@@ -29,12 +29,14 @@ type Server struct {
 	storage                storage.Storage
 	tracer                 trace.Tracer
 	authenticationDisabled bool
+	region                 string
 }
 
 func SetupServer(credentialProvider authentication.CredentialProvider, region string, apiEndpoint string, websiteEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
 	server := &Server{
 		requestAuthorizer:      requestAuthorizer,
 		authenticationDisabled: credentialProvider == nil,
+		region:                 region,
 		// CORS configuration is resolved on every Origin-bearing request, so wrap
 		// the storage in a cache that serves those reads without re-hitting the
 		// backend (and without flooding audit/metrics). Writes flow through the
@@ -230,6 +232,7 @@ const corsQuery = "cors"
 const lifecycleQuery = "lifecycle"
 const notificationQuery = "notification"
 const versioningQuery = "versioning"
+const locationQuery = "location"
 const versionsQuery = "versions"
 const versionIDQuery = "versionId"
 const taggingQuery = "tagging"

@@ -130,6 +130,13 @@ case-sensitively. Characters such as `%`, `_`, `*`, `?`, brackets, and backslash
 are ordinary key characters, not wildcards or escape sequences. SQL-backed
 listings compare keys in UTF-8 byte order, independently of the database locale.
 
+## Bucket Location
+
+`GET /<bucket>?location` returns the region Pithos is configured with
+(`PITHOS_REGION`, default `eu-central-1`) for every existing bucket, since
+Pithos serves a single region. As in S3, `us-east-1` is reported as an empty
+`LocationConstraint`. The request is authorized as `GetBucketLocation`.
+
 ## Expected Bucket Owner
 
 Bucket-scoped operations (except bucket creation) enforce

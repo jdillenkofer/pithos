@@ -71,10 +71,38 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
+// getBucketLocationHandler answers GetBucketLocation. Pithos serves a single
+// region, so every bucket reports the configured one. S3 reports us-east-1 as
+// an empty LocationConstraint.
+func (s *Server) getBucketLocationHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getBucketLocationHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if s.authorizeRequest(ctx, authorization.OperationGetBucketLocation, ptrutils.ToPtr(bucketName.String()), nil, w, r) {
+		return
+	}
+	if _, err := s.storage.HeadBucket(ctx, bucketName); err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	response := LocationConstraint{Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/"}
+	if s.region != "us-east-1" {
+		response.Value = s.region
+	}
+	writeXMLResponse(w, r, http.StatusOK, response)
+}
+
 func hasUnsupportedBucketSubresource(query url.Values, method string) bool {
 	allowedMethods := map[string]map[string]bool{
 		"cors":         {http.MethodGet: true, http.MethodPut: true, http.MethodDelete: true},
 		"lifecycle":    {http.MethodGet: true, http.MethodPut: true, http.MethodDelete: true},
+		"location":     {http.MethodGet: true},
 		"notification": {http.MethodGet: true, http.MethodPut: true},
 		"object-lock":  {http.MethodGet: true, http.MethodPut: true},
 		"tagging":      {http.MethodGet: true, http.MethodPut: true, http.MethodDelete: true},
@@ -106,6 +134,10 @@ func (s *Server) routeBucketGetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if query.Has("object-lock") {
 		s.objectLockConfigurationHandler(w, r)
+		return
+	}
+	if query.Has(locationQuery) {
+		s.getBucketLocationHandler(w, r)
 		return
 	}
 	if query.Has(versioningQuery) {

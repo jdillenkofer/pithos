@@ -13,7 +13,7 @@ type check struct {
 }
 
 var operationActions = map[string]string{
-	authorization.OperationListBuckets: "s3:ListAllMyBuckets", authorization.OperationHeadBucket: "s3:ListBucket",
+	authorization.OperationListBuckets: "s3:ListAllMyBuckets", authorization.OperationHeadBucket: "s3:ListBucket", authorization.OperationGetBucketLocation: "s3:GetBucketLocation",
 	authorization.OperationListObjects: "s3:ListBucket", authorization.OperationListObjectVersions: "s3:ListBucketVersions",
 	authorization.OperationListMultipartUploads: "s3:ListBucketMultipartUploads", authorization.OperationCreateBucket: "s3:CreateBucket",
 	authorization.OperationDeleteBucket: "s3:DeleteBucket", authorization.OperationGetObject: "s3:GetObject",
