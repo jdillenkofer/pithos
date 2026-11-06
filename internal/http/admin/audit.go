@@ -424,7 +424,7 @@ type auditPageData struct {
 func (a *App) registerAudit(mux *http.ServeMux) {
 	job := &adminJob{workers: &a.workers}
 	getSources := func() ([]auditSource, error) {
-		si, err := loadAdminStorageConfig(a.options.Settings.StorageJsonPath())
+		si, err := a.storageConfig()
 		if err != nil {
 			return nil, err
 		}

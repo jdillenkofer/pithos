@@ -315,8 +315,9 @@ records. Without an audit middleware/sink there is no persistent audit trail.
 
 ## Storage diagnostics
 
-The storage page projects decoded `storage.json` into a middleware/part-store
-tree using an explicit allowlist of displayable fields. It never renders raw
+The storage page projects the storage configuration the server started with
+(`storage.json`, or the built-in default when that file is missing) into a
+middleware/part-store tree using an explicit allowlist of displayable fields. It never renders raw
 configuration or provider credentials, encryption/signing keys, passwords,
 connection strings or URLs. Unknown types are shown without their fields.
 

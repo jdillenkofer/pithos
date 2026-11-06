@@ -228,7 +228,8 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	logLevel := settings.LogLevel()
 	logLevelVar.Set(logLevel)
 
-	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath())
+	storageJsonConfig := readStorageConfiguration(settings.StorageJsonPath())
+	dbContainer, store := loadStorageConfigurationFromJson(storageJsonConfig)
 
 	dbs := dbContainer.Dbs()
 
@@ -325,7 +326,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		adminContext, stopAdmin := context.WithCancel(ctx)
 		defer stopAdmin()
 		adminHandler, err := admin.NewHandler(admin.Options{
-			Context: adminContext, Settings: settings, Storage: store, StorageStarted: true,
+			Context: adminContext, Settings: settings, Storage: store, StorageConfig: storageJsonConfig, StorageStarted: true,
 			Databases: dbs, CredentialProvider: credentialProvider, Authorizer: requestAuthorizer,
 		})
 		if err != nil {
@@ -498,6 +499,22 @@ func validatePolicy(args []string) error {
 }
 
 func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, storage.Storage) {
+	return loadStorageConfigurationFromJson(readStorageConfiguration(storageJsonPath))
+}
+
+// readStorageConfiguration returns the storage configuration at
+// storageJsonPath, or defaultStorageConfig when it cannot be read.
+func readStorageConfiguration(storageJsonPath string) []byte {
+	storageJsonConfig, err := os.ReadFile(storageJsonPath)
+	if err != nil {
+		slog.Warn(fmt.Sprint("Couldn't load storageJson: ", err))
+		slog.Warn("Using defaultStorageConfig as fallback")
+		return []byte(defaultStorageConfig)
+	}
+	return storageJsonConfig
+}
+
+func loadStorageConfigurationFromJson(storageJsonConfig []byte) (*config.DbContainer, storage.Storage) {
 	diContainer, err := dependencyinjection.NewContainer()
 	if err != nil {
 		slog.Error(fmt.Sprint("Error while creating diContainer: ", err))
@@ -510,13 +527,6 @@ func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, stor
 		slog.Error(fmt.Sprint("Error while registering dbContainer in diContainer: ", err))
 		os.Exit(1)
 	}
-	storageJsonConfig, err := os.ReadFile(storageJsonPath)
-	if err != nil {
-		slog.Warn(fmt.Sprint("Couldn't load storageJson: ", err))
-		slog.Warn("Using defaultStorageConfig as fallback")
-		storageJsonConfig = []byte(defaultStorageConfig)
-	}
-
 	storageInstantiator, err := storageConfig.CreateStorageInstantiatorFromJson(storageJsonConfig)
 	if err != nil {
 		slog.Error(fmt.Sprint("Error while creating storageInstantiator from json: ", err))

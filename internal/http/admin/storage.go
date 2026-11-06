@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -297,21 +295,11 @@ func partTree(si partconfig.PartStoreInstantiator) storageNode {
 	}
 	return n
 }
-func loadAdminStorageConfig(path string) (storageconfig.StorageInstantiator, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	const max = 2 << 20
-	b, err := io.ReadAll(io.LimitReader(f, max+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(b) > max {
-		return nil, fmt.Errorf("storage configuration too large")
-	}
-	return storageconfig.CreateStorageInstantiatorFromJson(b)
+
+// storageConfig parses the configuration the running storage was built
+// from, which may be the built-in default rather than the storage JSON file.
+func (a *App) storageConfig() (storageconfig.StorageInstantiator, error) {
+	return storageconfig.CreateStorageInstantiatorFromJson(a.options.StorageConfig)
 }
 
 // adminValidationLimits keeps the last report, which lives as long as the
@@ -327,7 +315,7 @@ var adminValidationLimits = integrity.ResultLimits{
 func (a *App) registerStorage(mux *http.ServeMux) {
 	job := &adminJob{workers: &a.workers}
 	mux.HandleFunc("GET /storage", func(w http.ResponseWriter, r *http.Request) {
-		si, err := loadAdminStorageConfig(a.options.Settings.StorageJsonPath())
+		si, err := a.storageConfig()
 		if err != nil {
 			a.fail(w, r, http.StatusInternalServerError, "Unable to read storage configuration")
 			return

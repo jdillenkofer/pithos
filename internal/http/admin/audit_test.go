@@ -20,7 +20,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
-	"github.com/jdillenkofer/pithos/internal/settings"
 	storageconfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/stretchr/testify/require"
 )
@@ -163,14 +162,10 @@ func TestAuditRoutesVerifyAndRejectUserPaths(t *testing.T) {
 	source := auditTestSource(t, &serialization.JsonSerializer{}, 3)
 	encodedPath, err := json.Marshal(source.Path)
 	require.NoError(t, err)
-	configPath := filepath.Join(t.TempDir(), "storage.json")
 	raw := `{"type":"AuditStorageMiddleware","innerStorage":{"type":"S3ClientStorage","secretAccessKey":"CONFIG_SECRET"},"sinks":[{"type":"FileSink","path":` + string(encodedPath) + `,"serializer":{"type":"JsonSerializer"}}],"signing":{"ed25519":{"privateKey":"` + source.Signing.Ed25519.PrivateKey + `"},"mlDsa87":{"privateKey":"` + source.Signing.MlDsa87.PrivateKey + `"}}}`
-	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0600))
-	opts, err := settings.LoadSettings([]string{"--storageJsonPath", configPath})
-	require.NoError(t, err)
 	pages, err := template.ParseFS(assets, "templates/*.html")
 	require.NoError(t, err)
-	a := &App{options: Options{Context: t.Context(), Settings: opts}, pages: pages}
+	a := &App{options: Options{Context: t.Context(), StorageConfig: []byte(raw)}, pages: pages}
 	mux := http.NewServeMux()
 	a.registerAudit(mux)
 	get := httptest.NewRecorder()

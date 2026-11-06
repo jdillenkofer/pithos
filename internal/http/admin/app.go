@@ -25,9 +25,11 @@ import (
 // Options contains live server dependencies. Admin handlers operate on Storage
 // directly; they never reuse or weaken S3 API authorization.
 type Options struct {
-	Context            context.Context
-	Settings           *settings.Settings
-	Storage            storage.Storage
+	Context  context.Context
+	Settings *settings.Settings
+	Storage  storage.Storage
+	// StorageConfig is the storage configuration Storage was built from.
+	StorageConfig      []byte
 	StorageStarted     bool
 	Databases          []database.Database
 	CredentialProvider authentication.CredentialProvider

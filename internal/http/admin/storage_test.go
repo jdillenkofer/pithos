@@ -33,6 +33,21 @@ func TestStorageTreeNeverDisplaysSecrets(t *testing.T) {
 	require.Contains(t, out.String(), "S3ClientStorage")
 	require.Contains(t, out.String(), "Path-style requests")
 }
+
+// The page shows the configuration the server started with, even when no
+// storage JSON file exists and the built-in default was used.
+func TestStoragePageUsesStartupConfiguration(t *testing.T) {
+	pages, err := template.ParseFS(assets, "templates/*.html")
+	require.NoError(t, err)
+	a := &App{options: Options{Context: t.Context(), StorageConfig: []byte(`{"type":"S3ClientStorage","usePathStyle":true}`)}, pages: pages}
+	mux := http.NewServeMux()
+	a.registerStorage(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/storage", nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "S3ClientStorage")
+}
+
 func TestStorageProgressHidesBackendErrorsAndEscapesKeys(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderAdminProgress(rec, "storage_progress", jobProgressView{adminJobState: adminJobState{Started: time.Now(), Report: &integrity.ValidationReport{FailedObjects: 1, Results: []integrity.ValidationResult{{BucketName: "bucket", ObjectKey: "<script>alert(1)</script>", ErrorType: "postgres://user:SECRET@db", PartFailures: []integrity.PartFailure{{Error: "SECRET"}}}}}}})
