@@ -152,6 +152,24 @@ func setChecksumHeadersFromObject(headers http.Header, object *storage.Object) {
 	}
 }
 
+// setPartChecksumHeaders sets the checksums of one part of a multipart object,
+// limited to the algorithms the object reports. Nothing is set when the
+// backend does not expose part checksums, since the full-object checksum does
+// not describe the part.
+func setPartChecksumHeaders(headers http.Header, object *storage.Object, partNumber int) {
+	if partNumber < 1 || partNumber > len(object.PartChecksums) {
+		return
+	}
+	part := object.PartChecksums[partNumber-1]
+	setChecksumHeadersFromChecksumValues(headers, storage.ChecksumValues{
+		ChecksumCRC32:     checksumIfReported(object.ChecksumCRC32, part.ChecksumCRC32),
+		ChecksumCRC32C:    checksumIfReported(object.ChecksumCRC32C, part.ChecksumCRC32C),
+		ChecksumCRC64NVME: checksumIfReported(object.ChecksumCRC64NVME, part.ChecksumCRC64NVME),
+		ChecksumSHA1:      checksumIfReported(object.ChecksumSHA1, part.ChecksumSHA1),
+		ChecksumSHA256:    checksumIfReported(object.ChecksumSHA256, part.ChecksumSHA256),
+	})
+}
+
 func setChecksumHeadersFromChecksumValues(headers http.Header, checksumValues storage.ChecksumValues) {
 	if checksumValues.ETag != nil {
 		headers.Set(etagHeader, *checksumValues.ETag)
