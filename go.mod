@@ -15,7 +15,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
 	github.com/aws/aws-sdk-go-v2/service/sns v1.47.7
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.8
-	github.com/aws/smithy-go v1.28.7
+	github.com/aws/smithy-go v1.28.8
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/go-tpm v0.9.8
 	github.com/hashicorp/vault/api v1.23.0
