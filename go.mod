@@ -24,7 +24,7 @@ require (
 	github.com/klauspost/compress v1.20.4
 	github.com/klauspost/reedsolomon v1.14.2
 	github.com/mattn/go-sqlite3 v1.14.53
-	github.com/moby/moby/api v1.56.1
+	github.com/moby/moby/api v1.57.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pkg/sftp v1.13.12
 	github.com/prometheus/client_golang v1.25.0
@@ -47,7 +47,7 @@ require (
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.48.0
-	google.golang.org/api v0.313.0
+	google.golang.org/api v0.314.0
 )
 
 require (
