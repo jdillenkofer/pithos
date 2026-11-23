@@ -46,8 +46,8 @@ github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.12 h1:H0IaQayT3TLiG
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.12/go.mod h1:YuJJNxaOjnknLIrscBmkLhIpnmg9LzHd25sQRKUboGU=
 github.com/aws/aws-sdk-go-v2/service/kms v1.62.6 h1:AsNvSOsnEpLZGHoDY7u1zYrcBEsXdXoTjh0fSyr0CqQ=
 github.com/aws/aws-sdk-go-v2/service/kms v1.62.6/go.mod h1:VMuZyNobzmV/0SRCH5p+0dziD4U5AktOi3TzFMXq1rg=
-github.com/aws/aws-sdk-go-v2/service/lambda v1.114.4 h1:m9KfA2ojf6w77HjOrl8kpiNHAHz+sar1M0yDzEIxMEo=
-github.com/aws/aws-sdk-go-v2/service/lambda v1.114.4/go.mod h1:Y/PfQ6QmryXcdj5kOOCMUYFYCiDvwuYpjCJJE76DEKs=
+github.com/aws/aws-sdk-go-v2/service/lambda v1.115.0 h1:JKklfzikgy4WUW1FGLNkLZDQsK8J23svLDzDmLOz9WI=
+github.com/aws/aws-sdk-go-v2/service/lambda v1.115.0/go.mod h1:Y/PfQ6QmryXcdj5kOOCMUYFYCiDvwuYpjCJJE76DEKs=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10 h1:WBJb2VxRzzKnuN94YWqZPiu5a5zc3IleFqgZnmVCyvU=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10/go.mod h1:8NhAIBVYkVHq0hIbbzujdoou0VkKwMdG+De9e5oX6qI=
 github.com/aws/aws-sdk-go-v2/service/signin v1.13.1 h1:ssrDA6AKfXEc3h0Pf4EI4vQ8sN5Zd136SrU9Tjr0XPc=
@@ -363,8 +363,8 @@ golang.org/x/tools v0.1.12/go.mod h1:hNGJHUnrk76NpqgfD5Aqm5Crs+Hm0VOH/i9J2+nxYbc
 golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
 gonum.org/v1/gonum v0.17.0 h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=
 gonum.org/v1/gonum v0.17.0/go.mod h1:El3tOrEuMpv2UdMrbNlKEh9vd86bmQ6vqIcDwxEOc1E=
-google.golang.org/api v0.314.0 h1:1P6RtsfXD7KfUUI7YxdGcJ5Ekw+QHH9dEVTHzWc96p0=
-google.golang.org/api v0.314.0/go.mod h1:kn5kd1IMbs2x4hq99GcaTOumC0fnMYMwLNAfFxzpISU=
+google.golang.org/api v0.315.0 h1:77nwD4sln0GQQqQKb4CY+DJhRwA0AeQ4w0gkbLwRPms=
+google.golang.org/api v0.315.0/go.mod h1:kn5kd1IMbs2x4hq99GcaTOumC0fnMYMwLNAfFxzpISU=
 google.golang.org/genproto v0.0.0-20261012220534-4341edf3f941 h1:CXq2XEi5aEyLjjPZIwqrmQH8ZY4ctUwK7uyAx3mjX/U=
 google.golang.org/genproto v0.0.0-20261012220534-4341edf3f941/go.mod h1:3gK0ehnhP0V7/x3ypGoLyT3d0n6TSi/EcsphIjHrcz4=
 google.golang.org/genproto/googleapis/api v0.0.0-20261012220534-4341edf3f941 h1:DS/w3N8rsfrwxwgGSj6WhMsPo7aNQGmDx74J81zd0NQ=
